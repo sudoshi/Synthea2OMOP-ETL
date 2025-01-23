@@ -910,3 +910,24 @@ FROM population.supplies;
 
 
 COMMIT;
+
+-- Truncate all non-typed tables in the population schema
+TRUNCATE TABLE population.allergies CASCADE;
+TRUNCATE TABLE population.careplans CASCADE;
+TRUNCATE TABLE population.claims CASCADE;
+TRUNCATE TABLE population.claims_transactions CASCADE;
+TRUNCATE TABLE population.conditions CASCADE;
+TRUNCATE TABLE population.devices CASCADE;
+TRUNCATE TABLE population.encounters CASCADE;
+TRUNCATE TABLE population.imaging_studies CASCADE;
+TRUNCATE TABLE population.immunizations CASCADE;
+TRUNCATE TABLE population.medications CASCADE;
+TRUNCATE TABLE population.observations CASCADE;
+TRUNCATE TABLE population.organizations CASCADE;
+TRUNCATE TABLE population.patient_expenses CASCADE;
+TRUNCATE TABLE population.patients CASCADE;
+TRUNCATE TABLE population.payer_transitions CASCADE;
+TRUNCATE TABLE population.payers CASCADE;
+TRUNCATE TABLE population.procedures CASCADE;
+TRUNCATE TABLE population.providers CASCADE;
+TRUNCATE TABLE population.supplies CASCADE;
