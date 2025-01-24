@@ -1,172 +1,153 @@
-# OMOP ETL Project
+# OMOP ETL Project for Synthea Data
 
-Welcome to our **OMOP ETL** repository! This project demonstrates **end‐to‐end extraction, transformation, and loading** of healthcare data from a **source/staging schema** into the **OMOP Common Data Model (CDM)** (version 5.4). Below you will find an overview of the repository’s purpose, how we structure the staging and mapping steps, and example SQL scripts for loading each OMOP domain.
-
-![cdm54](https://github.com/user-attachments/assets/60533163-a718-44f0-9779-d15a9f1b0ff6)
----
-
-## Table of Contents
-
-1. [Overview](#overview)  
-2. [Project Structure](#project-structure)  
-3. [Staging Schema and Mapping](#staging-schema-and-mapping)  
-4. [ETL Steps for OMOP Domains](#etl-steps-for-omop-domains)  
-   - 4.1 [Person](#person)  
-   - 4.2 [Observation Period](#observation-period)  
-   - 4.3 [Visit Occurrence](#visit-occurrence)  
-   - 4.4 [Condition Occurrence](#condition-occurrence)  
-   - 4.5 [Drug Exposure](#drug-exposure)  
-   - 4.6 [Device Exposure](#device-exposure)  
-   - 4.7 [Measurement vs. Observation](#measurement-vs-observation)  
-   - 4.8 [Immunizations](#immunizations)  
-   - 4.9 [Care Plans, Notes, Other Text Data](#care-plans-notes-other-text-data)  
-   - 4.10 [Death](#death)  
-   - 4.11 [Cost / Payer Plan Period / Fact Relationship / Claims](#cost-payer_plan_period-fact_relationship-claims)  
-5. [References and Further Reading](#references)
-
----
+Welcome to our **OMOP ETL** repository! This project demonstrates **end-to-end extraction, transformation, and loading** of synthetic healthcare data from [Synthea™](https://github.com/synthetichealth/synthea) into the **OMOP Common Data Model (CDM)** (version 5.4). 
 
 ## Overview
 
-The **OMOP Common Data Model** standardizes the representation of healthcare data for use in analytics, research, and interoperability. In this repository, we show how to:
+The [Synthea™ Patient Generator](https://github.com/synthetichealth/synthea) is an open-source synthetic patient generator that models the medical history of artificial patients, created by The MITRE Corporation. This project shows how to transform Synthea's output into the OMOP Common Data Model format.
 
-1. **Create a staging schema** to store raw extracts and mapping tables.  
-2. **Map** local source codes (e.g., ICD, CPT, NDC, RxNorm, etc.) to standard OMOP concept IDs.  
-3. **Generate** integer IDs for persons, visits, conditions, etc. (since OMOP requires integer surrogate keys).  
-4. **Load** each OMOP domain (e.g., `person`, `visit_occurrence`, `condition_occurrence`) via targeted SQL insert statements.  
+## ETL Process Overview
 
-We assume you have:
+Our ETL process follows these main steps:
 
-- A source or staging area with raw tables like `patients_raw`, `encounters_raw`, `conditions_raw`, `medications_raw`, etc.  
-- Some means of code mapping (a `local_to_omop_concept_map` table, or a CASE statement, or an external terminologies server).  
-- A **final** OMOP schema named something like `omop_cdm`, or dynamically referenced as `@cdmDatabaseSchema`.
+1. **Initialize OMOP Schema**
+   - Run the OMOP CDM DDL scripts to create the core tables
+   - Set up the vocabulary tables structure
 
----
-## Staging Schema and Mapping
+2. **Load OMOP Vocabulary**
+   - Use `load_omop_vocab_tab.sh` to load vocabulary files
+   - Process CONCEPT, VOCABULARY, DOMAIN, and other vocabulary tables
+   - Handle circular foreign key dependencies
 
-A **staging schema** separates your raw source data from the final OMOP schema. Inside it, you typically define:
+3. **Generate Synthea Data**
+   - Use Synthea to generate synthetic patient data
+   - Output includes CSV files for patients, encounters, conditions, etc.
 
-- **Raw Extract Tables** (e.g., `patients_raw`, `encounters_raw`, etc.) to store data directly from your source system.  
-- **Mapping Tables** for:
-  - **IDs**: bridging your local `patient_id`, `encounter_id`, etc. to OMOP integer keys (`person_id`, `visit_occurrence_id`).  
-  - **Concept Codes**: linking local codes (ICD, SNOMED, RxNorm, CPT) to standard OMOP concept IDs.  
-- **Lookup Tables** for gender, race, ethnicity, if your data has text fields needing concept IDs.  
+4. **Load Raw Synthea Data**
+   - Use `load_synthea_staging.sh` to load Synthea CSVs
+   - Creates tables in the `population` schema
+   - All columns initially loaded as TEXT type
 
-Example: `staging.person_map(source_patient_id, person_id)` uses a sequence to assign each unique `source_patient_id` a new integer `person_id`.
+5. **Type Conversion**
+   - Convert raw TEXT columns to appropriate data types
+   - Handle UUIDs, timestamps, numerics, and enums
+   - Validate data during conversion
+   - Store typed data in `population.*_typed` tables
 
----
+6. **Staging for OMOP**
+   - Create staging schema and mapping tables
+   - Set up ID generation sequences
+   - Prepare lookup tables for standard concepts
 
-## ETL Steps for OMOP Domains
+7. **OMOP ETL**
+   - Transform typed Synthea data into OMOP format
+   - Generate surrogate keys
+   - Map source codes to standard concepts
+   - Load each OMOP domain table
 
-Below is a summary of the key ETL steps for each OMOP table or domain. See the **`sql/` folder** for sample scripts.
+## Project Structure
 
-### 4.1 Person
+```
+├── sql/
+│   ├── omop_ddl/              # OMOP CDM table definitions
+│   ├── vocabulary_load/       # Scripts for loading OMOP vocabulary
+│   ├── synthea_typing/        # Convert raw Synthea data to proper types
+│   ├── staging/              # Create staging schema and mapping tables
+│   └── etl/                  # OMOP domain-specific ETL scripts
+├── scripts/
+│   ├── load_omop_vocab_tab.sh # Vocabulary loading script
+│   └── load_synthea_staging.sh # Raw Synthea data loading script
+└── README.md
+```
 
-- **Source**: `patients_raw`  
-- **Insert** into `person`: generate `person_id` from `staging.person_map`.  
-- **Map** fields:
-  - `year_of_birth`, `month_of_birth`, `day_of_birth` from birthdate.  
-  - `gender_concept_id`, `race_concept_id`, `ethnicity_concept_id` from lookup tables.  
-  - `person_source_value` to store original ID.  
+## Detailed ETL Steps
 
-### 4.2 Observation Period
+### 1. Initialize OMOP Schema
 
-- **Source**: computed earliest and latest record dates from encounters, conditions, meds, etc.  
-- **Insert** into `observation_period`: each person gets at least one row.  
-  - `observation_period_start_date`, `observation_period_end_date`.  
-  - `period_type_concept_id` (e.g., 44814724 = “EHR record”).
+First, create the OMOP CDM tables using the standard DDL scripts. This sets up the target structure for our ETL process.
 
-### 4.3 Visit Occurrence
+### 2. Load OMOP Vocabulary
 
-- **Source**: `encounters_raw`  
-- **Insert** into `visit_occurrence`: generate `visit_occurrence_id`.  
-  - **Map** `encounter_class` to `visit_concept_id` (9201=Inpatient, 9202=Outpatient, etc.).  
-  - **Set** `visit_type_concept_id` (e.g., 44818518 = “Visit derived from EHR”).  
-  - **Link** to `person_id`, optional `provider_id`, `care_site_id`.
+The `load_omop_vocab_tab.sh` script handles loading the vocabulary files:
+- Temporarily drops circular foreign keys
+- Loads each vocabulary file using COPY
+- Shows progress with `pv`
+- Restores foreign key constraints
 
-### 4.4 Condition Occurrence
+### 3. Load Raw Synthea Data
 
-- **Source**: `conditions_raw`  
-- **Insert** into `condition_occurrence`:  
-  - `condition_concept_id` from your local code → standard code map.  
-  - `condition_start_date/datetime`, `condition_end_date/datetime`.  
-  - `condition_type_concept_id` (e.g., 32020 = “EHR problem list entry”).  
-  - `visit_occurrence_id` if relevant.
+The `load_synthea_staging.sh` script:
+- Creates tables based on CSV headers
+- Loads all columns as TEXT initially
+- Uses COPY for efficient bulk loading
+- Places tables in the `population` schema
 
-### 4.5 Drug Exposure
+### 4. Type Conversion
 
-- **Source**: `medications_raw`  
-- **Insert** into `drug_exposure`:  
-  - `drug_concept_id` from NDC or RxNorm mapping.  
-  - `drug_exposure_start_date`, `_end_date`.  
-  - `drug_type_concept_id` (e.g., 38000177 = “Prescription written”).  
-  - Optional fields like `refills`, `quantity`, `days_supply`, `sig`.
+SQL scripts in `sql/synthea_typing/` handle converting raw TEXT data to proper types:
+- UUIDs for IDs
+- TIMESTAMP for dates
+- NUMERIC for measurements
+- Custom ENUMs for coded values
+- Validation during conversion
 
-### 4.6 Device Exposure
+### 5. Staging Schema
 
-- **Source**: `devices_raw`  
-- **Insert** into `device_exposure`:  
-  - `device_concept_id` from local code → standard concept.  
-  - `device_exposure_start_date/datetime`, `_end_date/datetime`.  
-  - `device_type_concept_id` (44818707 = “Device Recorded from EHR”).  
-  - `unique_device_id` if you have a UDI.
+Create staging schema with:
+- ID mapping tables
+- Code lookup tables
+- Sequences for surrogate keys
+- Intermediate tables for complex transformations
 
-### 4.7 Measurement vs. Observation
+### 6. OMOP Domain Loading
 
-- **Measurement**: numeric labs, vital signs, etc.  
-  - **Source**: filter `observations_raw` where `category IN ('laboratory','vital-signs') AND value IS NOT NULL`.  
-  - Insert into `measurement` with `measurement_concept_id`, `value_as_number`, `unit_concept_id`, etc.
+Transform and load each OMOP domain:
+- person
+- observation_period
+- visit_occurrence
+- condition_occurrence
+- drug_exposure
+- measurement
+- observation
+- procedure_occurrence
+- device_exposure
+- death
+- cost / payer information
 
-- **Observation**: non‐numeric or textual data, social history, patient status, etc.  
-  - **Source**: the rest of `observations_raw`.  
-  - Insert into `observation` with `observation_concept_id`, `value_as_string`.
+## Code Example: Loading Raw Synthea Data
 
-### 4.8 Immunizations
+The `load_synthea_staging.sh` script demonstrates our approach to initial data loading:
 
-- Can be **`drug_exposure`** (if mapped to RxNorm) **or** **`procedure_occurrence`** (if codes are CVX/CPT/SNOMED procedure).  
-- **Decide** which domain best fits your source codes.  
-- Insert with the same pattern as standard drug or procedure ETL.
+```bash
+# Configuration
+DB_HOST="192.168.1.155"
+DB_PORT="5432"
+DB_NAME="synthea"
+DB_USER="postgres"
+DB_SCHEMA="population"
 
-### 4.9 Care Plans, Notes, Other Text Data
+# Process each CSV file
+for csv_file in *.csv; do
+  # Create table with TEXT columns from CSV header
+  header_line="$(head -n 1 "$csv_file")"
+  # ... create table logic ...
+  
+  # Load data using COPY
+  psql -c "\copy \"$DB_SCHEMA\".\"$table_name\" 
+          FROM '${csv_file}' 
+          CSV HEADER 
+          DELIMITER ',' 
+          QUOTE '\"' 
+          ESCAPE '\"';"
+done
+```
 
-- **Care Plans**:
-  - Often stored in `observation` if textual, or `episode` if representing a distinct “episode of care.”  
-- **Notes**:
-  - Insert into `note` table, with `note_id`, `person_id`, `note_text`, `note_type_concept_id` (44814645 = “Clinical note”).
+## References
 
-### 4.10 Death
+- [Synthea GitHub](https://github.com/synthetichealth/synthea)
+- [OMOP CDM Documentation](https://ohdsi.github.io/CommonDataModel/)
+- [OHDSI Documentation](https://ohdsi.github.io/TheBookOfOhdsi/)
 
-- **Source**: check if `patients_raw.deathdate` is not null.  
-- Insert one row per decedent into `death`, with:
-  - `person_id`  
-  - `death_date`  
-  - `death_type_concept_id` (38003565 = “EHR reported death”)  
-  - Optional cause of death if coded.
+## Contributing
 
-### 4.11 Cost / Payer Plan Period / Fact Relationship / Claims
-
-- **Payer Plan Period**:
-  - Insert coverage intervals for each patient, e.g., from `patient_expenses_raw`.  
-- **Cost**:
-  - For each claim line or transaction, identify the domain event (`drug_exposure_id`, `procedure_occurrence_id`, etc.) and create a row in `cost`, setting `cost_domain_id`, `cost_event_id`, plus `total_charge`, `total_cost`, `total_paid`, etc.  
-  - Optionally link to `payer_plan_period_id`.
-- **Fact Relationship** (optional):
-  - Link facts across domains by specifying `domain_concept_id_1`, `fact_id_1`, `domain_concept_id_2`, `fact_id_2`, and a suitable `relationship_concept_id`.
-
----
-
-## References and Further Reading
-
-- **[OMOP CDM GitHub](https://github.com/ohdsi/commonDataModel)** – Official OMOP Common Data Model repository by OHDSI.  
-- **[OHDSI Book of OHDSI](https://ohdsi.github.io/TheBookOfOhdsi/)** – Comprehensive guide on the CDM, analytics, and use cases.  
-- **[Vocabulary Documentation](https://www.ohdsi.org/web/wiki/doku.php?id=documentation:vocabulary:start)** – Detailed info on concept mapping, domain tables, and standard concepts.  
-- **[Staging Approach](https://ohdsi.github.io/TheBookOfOhdsi/ETLDesign.html)** – Best practices for setting up a staging area for your ETL.
-
----
-
-## Questions or Contributions?
-
-Feel free to **open an Issue** or **submit a Pull Request** if you have improvements or questions about mapping your own data to OMOP. We appreciate feedback, bug reports, and collaboration!
-
-**Happy ETL-ing!**
-
+We welcome contributions! Please feel free to submit issues or pull requests if you have improvements or questions about the ETL process.
