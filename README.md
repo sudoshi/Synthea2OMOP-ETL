@@ -68,7 +68,41 @@ First, create the OMOP CDM tables using the standard DDL scripts. This sets up t
 
 ### 2. Load OMOP Vocabulary
 
-The `load_omop_vocab_tab.sh` script handles loading the vocabulary files:
+Before loading the vocabulary files, we need to handle a common preprocessing issue: the presence of problematic double quotes in the CSV files that can interfere with the import process. We provide a preprocessing script `remove_vocab_quotes.sh` to handle this:
+
+```bash
+#!/bin/bash
+
+# Color definitions for better visibility
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Check if pv is installed
+if ! command -v pv &> /dev/null; then
+    echo -e "${RED}Error: 'pv' is not installed. Please install it first.${NC}"
+    exit 1
+fi
+
+# Process files with progress tracking
+for file in *.csv; do
+    echo -e "\n${BLUE}Processing: $file${NC}"
+    size=$(wc -c < "$file")
+    cat "$file" | pv -s "$size" | tr -d '"' > "$temp_file"
+    mv "$temp_file" "$file"
+done
+```
+
+This preprocessing script:
+- Checks for the required `pv` utility for progress tracking
+- Shows all CSV files that will be processed
+- Requests confirmation before proceeding
+- Removes problematic double quotes
+- Provides visual progress feedback
+- Maintains the original file names
+
+After preprocessing, the `load_omop_vocab_tab.sh` script handles loading the vocabulary files:
 - Temporarily drops circular foreign keys
 - Loads each vocabulary file using COPY
 - Shows progress with `pv`
