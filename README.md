@@ -1,10 +1,19 @@
-# OMOP ETL Project for Synthea Data
+# Enhanced Synthea2OMOP-ETL
 
-Welcome to our **OMOP ETL** repository! This project demonstrates **end-to-end extraction, transformation, and loading** of synthetic healthcare data from [Synthea™](https://github.com/synthetichealth/synthea) into the **OMOP Common Data Model (CDM)** (version 5.4). 
+An enhanced ETL pipeline for converting Synthea synthetic healthcare data to the OMOP Common Data Model (version 5.4).
 
 ## Overview
 
-The [Synthea™ Patient Generator](https://github.com/synthetichealth/synthea) is an open-source synthetic patient generator that models the medical history of artificial patients, created by The MITRE Corporation. This project shows how to transform Synthea's output into the OMOP Common Data Model format.
+The [Synthea™ Patient Generator](https://github.com/synthetichealth/synthea) is an open-source synthetic patient generator that models the medical history of artificial patients, created by The MITRE Corporation. This project demonstrates how to transform Synthea's output into the OMOP Common Data Model format with a robust, configurable ETL pipeline.
+
+## Key Features
+
+- **Flexible Configuration System**: Environment-specific settings in `.env` files and project-wide settings in `config.json`
+- **Comprehensive Logging**: Detailed logs for each ETL step with timestamps and error tracking
+- **Modular Architecture**: Clear separation of concerns with distinct modules for each ETL phase
+- **Error Handling**: Robust error handling and recovery mechanisms
+- **Testing Framework**: Unit tests to ensure code quality and reliability
+- **Documentation**: Detailed documentation for all components and processes
 
 ## ETL Process Overview
 
@@ -15,7 +24,7 @@ Our ETL process follows these main steps:
    - Set up the vocabulary tables structure
 
 2. **Load OMOP Vocabulary**
-   - Use `load_omop_vocab_tab.sh` to load vocabulary files
+   - Use `load_omop_vocab.sh` to load vocabulary files
    - Process CONCEPT, VOCABULARY, DOMAIN, and other vocabulary tables
    - Handle circular foreign key dependencies
 
@@ -45,135 +54,72 @@ Our ETL process follows these main steps:
    - Map source codes to standard concepts
    - Load each OMOP domain table
 
+## Setup
+
+1. Clone this repository
+2. Run `python init_project.py` to initialize the project structure
+3. Copy your Synthea CSV files to the `synthea_data` directory
+4. Copy your OMOP vocabulary files to the `vocabulary` directory
+5. Edit the `.env` file with your database connection details
+6. Install dependencies: `pip install -r requirements.txt`
+7. Run the ETL process: `python run_etl.py`
+
+## Configuration
+
+- `.env`: Environment-specific configuration (database credentials, etc.)
+- `config.json`: Project-wide settings and mappings
+
+See [Configuration Documentation](docs/configuration.md) for details.
+
 ## Project Structure
 
 ```
-├── sql/
-│   ├── omop_ddl/              # OMOP CDM table definitions
-│   ├── vocabulary_load/       # Scripts for loading OMOP vocabulary
-│   ├── synthea_typing/        # Convert raw Synthea data to proper types
+├── sql/                      # SQL scripts
+│   ├── omop_ddl/             # OMOP CDM table definitions
+│   ├── synthea_typing/       # Convert raw Synthea data to proper types
 │   ├── staging/              # Create staging schema and mapping tables
 │   └── etl/                  # OMOP domain-specific ETL scripts
-├── scripts/
-│   ├── load_omop_vocab_tab.sh # Vocabulary loading script
+├── scripts/                  # Shell scripts
+│   ├── load_omop_vocab.sh    # Vocabulary loading script
 │   └── load_synthea_staging.sh # Raw Synthea data loading script
-└── README.md
+├── utils/                    # Python utility modules
+│   ├── __init__.py
+│   └── config_loader.py      # Configuration loading module
+├── tests/                    # Test suite
+│   ├── __init__.py
+│   └── test_config_loader.py # Tests for configuration loader
+├── docs/                     # Documentation
+│   └── configuration.md      # Configuration documentation
+├── .env.example              # Example environment variables
+├── config.json               # Project configuration
+├── init_project.py           # Project initialization script
+├── run_etl.py                # Main ETL runner
+├── run_tests.py              # Test runner
+├── requirements.txt          # Python dependencies
+└── README.md                 # This file
 ```
 
-## Detailed ETL Steps
+## Running the ETL Process
 
-### 1. Initialize OMOP Schema
-
-First, create the OMOP CDM tables using the standard DDL scripts. This sets up the target structure for our ETL process.
-
-### 2. Load OMOP Vocabulary
-
-Before loading the vocabulary files, we need to handle a common preprocessing issue: the presence of problematic double quotes in the CSV files that can interfere with the import process. We provide a preprocessing script `remove_vocab_quotes.sh` to handle this:
+The main entry point for running the ETL process is `run_etl.py`. You can run the entire process or skip specific steps:
 
 ```bash
-#!/bin/bash
+# Run the full ETL process
+python run_etl.py
 
-# Color definitions for better visibility
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# Skip loading vocabulary and run from Synthea data loading
+python run_etl.py --skip-schema --skip-vocab
 
-# Check if pv is installed
-if ! command -v pv &> /dev/null; then
-    echo -e "${RED}Error: 'pv' is not installed. Please install it first.${NC}"
-    exit 1
-fi
-
-# Process files with progress tracking
-for file in *.csv; do
-    echo -e "\n${BLUE}Processing: $file${NC}"
-    size=$(wc -c < "$file")
-    cat "$file" | pv -s "$size" | tr -d '"' > "$temp_file"
-    mv "$temp_file" "$file"
-done
+# Only run the ETL process (skip all previous steps)
+python run_etl.py --skip-schema --skip-vocab --skip-synthea --skip-typing --skip-staging
 ```
 
-This preprocessing script:
-- Checks for the required `pv` utility for progress tracking
-- Shows all CSV files that will be processed
-- Requests confirmation before proceeding
-- Removes problematic double quotes
-- Provides visual progress feedback
-- Maintains the original file names
+## Running Tests
 
-After preprocessing, the `load_omop_vocab_tab.sh` script handles loading the vocabulary files:
-- Temporarily drops circular foreign keys
-- Loads each vocabulary file using COPY
-- Shows progress with `pv`
-- Restores foreign key constraints
-
-### 3. Load Raw Synthea Data
-
-The `load_synthea_staging.sh` script:
-- Creates tables based on CSV headers
-- Loads all columns as TEXT initially
-- Uses COPY for efficient bulk loading
-- Places tables in the `population` schema
-
-### 4. Type Conversion
-
-SQL scripts in `sql/synthea_typing/` handle converting raw TEXT data to proper types:
-- UUIDs for IDs
-- TIMESTAMP for dates
-- NUMERIC for measurements
-- Custom ENUMs for coded values
-- Validation during conversion
-
-### 5. Staging Schema
-
-Create staging schema with:
-- ID mapping tables
-- Code lookup tables
-- Sequences for surrogate keys
-- Intermediate tables for complex transformations
-
-### 6. OMOP Domain Loading
-
-Transform and load each OMOP domain:
-- person
-- observation_period
-- visit_occurrence
-- condition_occurrence
-- drug_exposure
-- measurement
-- observation
-- procedure_occurrence
-- device_exposure
-- death
-- cost / payer information
-
-## Code Example: Loading Raw Synthea Data
-
-The `load_synthea_staging.sh` script demonstrates our approach to initial data loading:
+To run the test suite:
 
 ```bash
-# Configuration
-DB_HOST="192.168.1.155"
-DB_PORT="5432"
-DB_NAME="synthea"
-DB_USER="postgres"
-DB_SCHEMA="population"
-
-# Process each CSV file
-for csv_file in *.csv; do
-  # Create table with TEXT columns from CSV header
-  header_line="$(head -n 1 "$csv_file")"
-  # ... create table logic ...
-  
-  # Load data using COPY
-  psql -c "\copy \"$DB_SCHEMA\".\"$table_name\" 
-          FROM '${csv_file}' 
-          CSV HEADER 
-          DELIMITER ',' 
-          QUOTE '\"' 
-          ESCAPE '\"';"
-done
+python run_tests.py
 ```
 
 ## References
@@ -181,6 +127,7 @@ done
 - [Synthea GitHub](https://github.com/synthetichealth/synthea)
 - [OMOP CDM Documentation](https://ohdsi.github.io/CommonDataModel/)
 - [OHDSI Documentation](https://ohdsi.github.io/TheBookOfOhdsi/)
+- [Python-dotenv Documentation](https://github.com/theskumar/python-dotenv)
 
 ## Contributing
 

@@ -1,0 +1,55 @@
+{
+  "project": {
+    "name": "Synthea2OMOP-ETL",
+    "version": "1.0.0",
+    "description": "ETL pipeline for converting Synthea data to OMOP CDM"
+  },
+  "database": {
+    "connection_timeout": 30,
+    "max_connections": 20,
+    "enable_ssl": false
+  },
+  "etl": {
+    "batch_size": 10000,
+    "enable_logging": true,
+    "log_level": "INFO",
+    "truncate_target_tables": true
+  },
+  "mapping": {
+    "gender": {
+      "M": 8507,
+      "F": 8532
+    },
+    "race": {
+      "white": 8527,
+      "black": 8516,
+      "asian": 8515,
+      "hawaiian": 8557
+    },
+    "ethnicity": {
+      "hispanic": 38003563,
+      "nonhispanic": 38003564
+    },
+    "visit_type": {
+      "inpatient": 9201,
+      "outpatient": 9202,
+      "emergency": 9203,
+      "other": 44818517
+    }
+  },
+  "vocabulary": {
+    "version": "v5.0 20-MAY-23",
+    "files": [
+      "CONCEPT.csv",
+      "VOCABULARY.csv",
+      "DOMAIN.csv",
+      "CONCEPT_CLASS.csv",
+      "RELATIONSHIP.csv",
+      "CONCEPT_RELATIONSHIP.csv",
+      "CONCEPT_SYNONYM.csv",
+      "CONCEPT_ANCESTOR.csv",
+      "DRUG_STRENGTH.csv",
+      "SOURCE_TO_CONCEPT_MAP.csv"
+    ]
+  }
+}
