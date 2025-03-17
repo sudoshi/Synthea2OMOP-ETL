@@ -2,16 +2,17 @@ version: '3.8'
 
 services:
   synthea:
+    container_name: synthea
     build:
       context: ./synthea
       dockerfile: Dockerfile
     volumes:
       - synthea-output:/output
     environment:
-      - POPULATION=1000
+      - POPULATION=10
       - SEED=1
-      - STATE=Massachusetts
-      - CITY=Bedford
+      - STATE=Pennsylvania
+      - CITY=
       - GENDER=
       - AGE=
       - MODULE=
@@ -19,6 +20,7 @@ services:
       - app-network
 
   synthea-api:
+    container_name: synthea-api
     build:
       context: ./synthea/api
       dockerfile: Dockerfile
@@ -33,6 +35,7 @@ services:
       - app-network
 
   frontend:
+    container_name: frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -50,6 +53,7 @@ services:
       - app-network
 
   backend:
+    container_name: backend
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -71,6 +75,7 @@ services:
       - app-network
 
   api:
+    container_name: api
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -88,6 +93,7 @@ services:
       - app-network
 
   achilles-r:
+    container_name: achilles-r
     build:
       context: ./achilles
       dockerfile: Dockerfile
@@ -145,6 +151,7 @@ services:
       - postgres
 
   postgres:
+    container_name: postgres
     image: postgres:14
     ports:
       - "5434:5432"
