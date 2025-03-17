@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3080:3000"
+    volumes:
+      - ./frontend:/app:cached
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://localhost:5080
+    depends_on:
+      - backend
+      - api
+    networks:
+      - app-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5080:5000"
+    volumes:
+      - ./backend:/app:cached
+      - backend_node_modules:/app/node_modules
+    environment:
+      - PORT=5000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=synthea
+      - DB_USER=postgres
+      - DB_PASSWORD=acumenus
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "5081:5000"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=synthea
+      - DB_USER=postgres
+      - DB_PASSWORD=acumenus
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+
+  achilles-r:
+    build:
+      context: ./achilles
+      dockerfile: Dockerfile
+    volumes:
+      - ./achilles/scripts:/app/scripts
+      - ./achilles/output:/app/output
+      - ./achilles/drivers:/drivers
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=synthea
+      - DB_USER=postgres
+      - DB_PASSWORD=acumenus
+      - CDM_SCHEMA=omop
+      - RESULTS_SCHEMA=achilles_results
+      - VOCAB_SCHEMA=omop
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      mkdir -p /tmp/achilles && \
+      cat > /tmp/achilles/config.json << 'EOF'
+      {
+        "dbms": "postgresql",
+        "server": "postgres/synthea",
+        "port": "5432",
+        "user": "postgres",
+        "password": "acumenus",
+        "pathToDriver": "/drivers",
+        "cdmDatabaseSchema": "omop",
+        "resultsDatabaseSchema": "achilles_results",
+        "vocabDatabaseSchema": "omop",
+        "sourceName": "Synthea",
+        "createTable": true,
+        "smallCellCount": 5,
+        "cdmVersion": "5.4",
+        "createIndices": true,
+        "numThreads": 4,
+        "tempAchillesPrefix": "tmpach",
+        "dropScratchTables": true,
+        "sqlOnly": false,
+        "outputFolder": "/app/output",
+        "verboseMode": true,
+        "optimizeAtlasCache": true,
+        "defaultAnalysesOnly": true,
+        "updateGivenAnalysesOnly": false,
+        "excludeAnalysisIds": false,
+        "sqlDialect": "postgresql",
+        "progressFile": "/tmp/achilles/progress.json",
+        "resultsFile": "/tmp/achilles/results.json"
+      }
+      EOF
+      Rscript /app/scripts/run_achilles.R /tmp/achilles/config.json
+    networks:
+      - app-network
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:14
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=acumenus
+      - POSTGRES_DB=synthea
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  frontend_node_modules:
+  backend_node_modules:

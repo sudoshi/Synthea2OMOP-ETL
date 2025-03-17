@@ -1,134 +1,114 @@
-# Enhanced Synthea2OMOP-ETL
+# Synthea2OMOP ETL Dashboard
 
-An enhanced ETL pipeline for converting Synthea synthetic healthcare data to the OMOP Common Data Model (version 5.4).
+A web-based dashboard for monitoring and managing the Synthea to OMOP ETL (Extract, Transform, Load) process.
 
 ## Overview
 
-The [Synthea™ Patient Generator](https://github.com/synthetichealth/synthea) is an open-source synthetic patient generator that models the medical history of artificial patients, created by The MITRE Corporation. This project demonstrates how to transform Synthea's output into the OMOP Common Data Model format with a robust, configurable ETL pipeline.
+This project provides a comprehensive dashboard for monitoring the progress of the Synthea to OMOP ETL process. It includes:
 
-## Key Features
+- Real-time ETL progress monitoring
+- System resource usage tracking
+- Data exploration and visualization
+- ETL configuration management
 
-- **Flexible Configuration System**: Environment-specific settings in `.env` files and project-wide settings in `config.json`
-- **Comprehensive Logging**: Detailed logs for each ETL step with timestamps and error tracking
-- **Modular Architecture**: Clear separation of concerns with distinct modules for each ETL phase
-- **Error Handling**: Robust error handling and recovery mechanisms
-- **Testing Framework**: Unit tests to ensure code quality and reliability
-- **Documentation**: Detailed documentation for all components and processes
+## Architecture
 
-## ETL Process Overview
+The project consists of three main components:
 
-Our ETL process follows these main steps:
+1. **Frontend**: A React application with Material-UI for the user interface
+2. **Backend**: An Express.js API server that interfaces with the database
+3. **Database**: A PostgreSQL database that stores the ETL data
 
-1. **Initialize OMOP Schema**
-   - Run the OMOP CDM DDL scripts to create the core tables
-   - Set up the vocabulary tables structure
+## Getting Started
 
-2. **Load OMOP Vocabulary**
-   - Use `load_omop_vocab.sh` to load vocabulary files
-   - Process CONCEPT, VOCABULARY, DOMAIN, and other vocabulary tables
-   - Handle circular foreign key dependencies
+### Prerequisites
 
-3. **Generate Synthea Data**
-   - Use Synthea to generate synthetic patient data
-   - Output includes CSV files for patients, encounters, conditions, etc.
+- Docker and Docker Compose
+- Node.js (for local development)
+- PostgreSQL (for local development)
 
-4. **Load Raw Synthea Data**
-   - Use `load_synthea_staging.sh` to load Synthea CSVs
-   - Creates tables in the `population` schema
-   - All columns initially loaded as TEXT type
+### Installation
 
-5. **Type Conversion**
-   - Convert raw TEXT columns to appropriate data types
-   - Handle UUIDs, timestamps, numerics, and enums
-   - Validate data during conversion
-   - Store typed data in `population.*_typed` tables
+1. Clone the repository:
+   ```
+   git clone https://github.com/acumenus/Synthea2OMOP-ETL.git
+   cd Synthea2OMOP-ETL
+   ```
 
-6. **Staging for OMOP**
-   - Create staging schema and mapping tables
-   - Set up ID generation sequences
-   - Prepare lookup tables for standard concepts
+2. Start the application using Docker Compose:
+   ```
+   docker-compose up
+   ```
 
-7. **OMOP ETL**
-   - Transform typed Synthea data into OMOP format
-   - Generate surrogate keys
-   - Map source codes to standard concepts
-   - Load each OMOP domain table
+3. Access the dashboard at http://localhost:3000
 
-## Setup
+### Local Development
 
-1. Clone this repository
-2. Run `python init_project.py` to initialize the project structure
-3. Copy your Synthea CSV files to the `synthea_data` directory
-4. Copy your OMOP vocabulary files to the `vocabulary` directory
-5. Edit the `.env` file with your database connection details
-6. Install dependencies: `pip install -r requirements.txt`
-7. Run the ETL process: `python run_etl.py`
+#### Frontend
 
-## Configuration
+1. Navigate to the frontend directory:
+   ```
+   cd frontend
+   ```
 
-- `.env`: Environment-specific configuration (database credentials, etc.)
-- `config.json`: Project-wide settings and mappings
+2. Install dependencies:
+   ```
+   npm install
+   ```
 
-See [Configuration Documentation](docs/configuration.md) for details.
+3. Start the development server:
+   ```
+   npm start
+   ```
 
-## Project Structure
+4. Access the frontend at http://localhost:3000
 
-```
-├── sql/                      # SQL scripts
-│   ├── omop_ddl/             # OMOP CDM table definitions
-│   ├── synthea_typing/       # Convert raw Synthea data to proper types
-│   ├── staging/              # Create staging schema and mapping tables
-│   └── etl/                  # OMOP domain-specific ETL scripts
-├── scripts/                  # Shell scripts
-│   ├── load_omop_vocab.sh    # Vocabulary loading script
-│   └── load_synthea_staging.sh # Raw Synthea data loading script
-├── utils/                    # Python utility modules
-│   ├── __init__.py
-│   └── config_loader.py      # Configuration loading module
-├── tests/                    # Test suite
-│   ├── __init__.py
-│   └── test_config_loader.py # Tests for configuration loader
-├── docs/                     # Documentation
-│   └── configuration.md      # Configuration documentation
-├── .env.example              # Example environment variables
-├── config.json               # Project configuration
-├── init_project.py           # Project initialization script
-├── run_etl.py                # Main ETL runner
-├── run_tests.py              # Test runner
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
-```
+#### Backend
 
-## Running the ETL Process
+1. Navigate to the backend directory:
+   ```
+   cd backend
+   ```
 
-The main entry point for running the ETL process is `run_etl.py`. You can run the entire process or skip specific steps:
+2. Install dependencies:
+   ```
+   npm install
+   ```
 
-```bash
-# Run the full ETL process
-python run_etl.py
+3. Start the development server:
+   ```
+   npm run dev
+   ```
 
-# Skip loading vocabulary and run from Synthea data loading
-python run_etl.py --skip-schema --skip-vocab
+4. The API will be available at http://localhost:5000
 
-# Only run the ETL process (skip all previous steps)
-python run_etl.py --skip-schema --skip-vocab --skip-synthea --skip-typing --skip-staging
-```
+## Features
 
-## Running Tests
+### ETL Monitoring
 
-To run the test suite:
+- Real-time progress tracking
+- Table-level progress visualization
+- Step-by-step ETL process monitoring
+- System resource usage monitoring
 
-```bash
-python run_tests.py
-```
+### Data Exploration
 
-## References
+- Browse data in OMOP tables
+- Execute custom SQL queries
+- View data quality metrics
 
-- [Synthea GitHub](https://github.com/synthetichealth/synthea)
-- [OMOP CDM Documentation](https://ohdsi.github.io/CommonDataModel/)
-- [OHDSI Documentation](https://ohdsi.github.io/TheBookOfOhdsi/)
-- [Python-dotenv Documentation](https://github.com/theskumar/python-dotenv)
+### Configuration
 
-## Contributing
+- Configure database connections
+- Set ETL parameters
+- Manage ETL process
 
-We welcome contributions! Please feel free to submit issues or pull requests if you have improvements or questions about the ETL process.
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgements
+
+- [Synthea](https://github.com/synthetichealth/synthea) - Synthetic patient generator
+- [OMOP CDM](https://www.ohdsi.org/data-standardization/the-common-data-model/) - Common Data Model for standardizing healthcare data
+- [Material-UI](https://mui.com/) - React UI framework
