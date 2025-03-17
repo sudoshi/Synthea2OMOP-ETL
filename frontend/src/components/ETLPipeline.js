@@ -7,7 +7,8 @@ import {
   LinearProgress, 
   Chip,
   Button,
-  Divider
+  Divider,
+  Container
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { 
@@ -93,6 +94,18 @@ const ControlButton = styled(Button)(({ theme }) => ({
   },
   '& svg': {
     color: '#90caf9'
+  },
+  '&.MuiButton-contained': {
+    background: 'rgba(144, 202, 249, 0.15)',
+    '&:hover': {
+      background: 'rgba(144, 202, 249, 0.25)',
+    },
+  },
+  '&.Mui-disabled': {
+    color: 'rgba(255, 255, 255, 0.3)',
+    '& svg': {
+      color: 'rgba(255, 255, 255, 0.3)'
+    }
   }
 }));
 
@@ -123,6 +136,20 @@ const mockETLPhases = [
     duration: '5m 0s'
   },
   {
+    id: 'vocabulary-loading',
+    name: 'Vocabulary Loading',
+    icon: <MixerHorizontalIcon width={24} height={24} style={{ color: '#90caf9' }} />,
+    status: 'in-progress',
+    progress: 60,
+    steps: [
+      { name: 'Download OMOP vocabulary files', status: 'completed', progress: 100 },
+      { name: 'Load vocabulary into OMOP schema', status: 'in-progress', progress: 40 }
+    ],
+    startTime: '2025-03-17 04:30:00',
+    endTime: null,
+    duration: '10m 12s (ongoing)'
+  },
+  {
     id: 'synthea-generation',
     name: 'Synthea Data Generation',
     icon: <PersonIcon width={24} height={24} style={{ color: '#90caf9' }} />,
@@ -150,20 +177,6 @@ const mockETLPhases = [
     startTime: '2025-03-17 04:25:00',
     endTime: '2025-03-17 04:30:00',
     duration: '5m 0s'
-  },
-  {
-    id: 'vocabulary-loading',
-    name: 'Vocabulary Loading',
-    icon: <MixerHorizontalIcon width={24} height={24} style={{ color: '#90caf9' }} />,
-    status: 'in-progress',
-    progress: 60,
-    steps: [
-      { name: 'Download OMOP vocabulary files', status: 'completed', progress: 100 },
-      { name: 'Load vocabulary into OMOP schema', status: 'in-progress', progress: 40 }
-    ],
-    startTime: '2025-03-17 04:30:00',
-    endTime: null,
-    duration: '10m 12s (ongoing)'
   },
   {
     id: 'etl-transformation',
@@ -365,8 +378,8 @@ function ETLPipeline() {
   const overallProgress = etlPhases.reduce((acc, phase) => acc + phase.progress, 0) / etlPhases.length;
   
   return (
-    <Box>
-      <Typography variant="h5" gutterBottom sx={{ fontWeight: 600 }}>
+    <Container maxWidth="xl" sx={{ mt: 2, mb: 4 }}>
+      <Typography variant="h4" gutterBottom component="h2" sx={{ fontWeight: 600 }}>
         ETL Pipeline
       </Typography>
       
@@ -408,7 +421,7 @@ function ETLPipeline() {
           </Grid>
         ))}
       </Grid>
-    </Box>
+    </Container>
   );
 }
 

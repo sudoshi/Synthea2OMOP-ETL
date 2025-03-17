@@ -6,30 +6,16 @@ import Typography from '@mui/material/Typography';
 import IconButton from '@mui/material/IconButton';
 import { GearIcon } from '@radix-ui/react-icons';
 
-const drawerWidth = 240;
-
-const AppBar = styled(MuiAppBar, {
-  shouldForwardProp: (prop) => prop !== 'open',
-})(({ theme, open }) => ({
+const AppBar = styled(MuiAppBar)(({ theme }) => ({
   zIndex: theme.zIndex.drawer + 1,
   width: '100%',
-  transition: theme.transitions.create(['width', 'margin'], {
-    easing: theme.transitions.easing.sharp,
-    duration: theme.transitions.duration.leavingScreen,
-  }),
+  position: 'fixed',
   backdropFilter: 'blur(10px)',
   WebkitBackdropFilter: 'blur(10px)',
   background: 'rgba(30, 30, 40, 0.75)',
   boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
   borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-  ...(open && {
-    marginLeft: drawerWidth,
-    width: `calc(100% - ${drawerWidth}px)`,
-    transition: theme.transitions.create(['width', 'margin'], {
-      easing: theme.transitions.easing.sharp,
-      duration: theme.transitions.duration.enteringScreen,
-    }),
-  }),
+  borderRadius: 0, // Remove rounded corners from header
 }));
 
 // Custom styled button with glassmorphism effect
@@ -44,9 +30,9 @@ const GlassIconButton = styled(IconButton)(({ theme }) => ({
   },
 }));
 
-function Header({ open }) {
+function Header() {
   return (
-    <AppBar position="absolute" open={open} className="glass">
+    <AppBar position="fixed" className="glass">
       <Toolbar
         sx={{
           pr: '24px', // keep right padding when drawer closed

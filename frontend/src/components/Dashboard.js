@@ -80,7 +80,7 @@ const GradientText = styled(Typography)(({ theme }) => ({
 
 function Dashboard() {
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
       <GradientText variant="h4" gutterBottom component="h2" className="mb-6">
         Synthea2OMOP ETL Dashboard
       </GradientText>

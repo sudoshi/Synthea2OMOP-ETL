@@ -112,8 +112,8 @@ function UnifiedConfiguration() {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Typography variant="h4" gutterBottom component="h2">
+    <Container maxWidth="xl" sx={{ mt: 2, mb: 4 }}>
+      <Typography variant="h4" gutterBottom component="h2" sx={{ fontWeight: 600 }}>
         Configuration
       </Typography>
 
@@ -425,7 +425,17 @@ function ETLConfigTab() {
         </Grid>
 
         <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
-          <Button variant="contained" color="primary" onClick={handleSave}>
+          <Button 
+            variant="contained" 
+            onClick={handleSave}
+            sx={{ 
+              color: '#90caf9',
+              background: 'rgba(144, 202, 249, 0.15)',
+              '&:hover': {
+                background: 'rgba(144, 202, 249, 0.25)',
+              }
+            }}
+          >
             Save Configuration
           </Button>
         </Box>
@@ -771,9 +781,18 @@ function AchillesConfigTab() {
           <Button
             type="submit"
             variant="contained"
-            color="primary"
             startIcon={<PlayArrowIcon />}
             disabled={loading}
+            sx={{ 
+              color: '#90caf9',
+              background: 'rgba(144, 202, 249, 0.15)',
+              '&:hover': {
+                background: 'rgba(144, 202, 249, 0.25)',
+              },
+              '&.Mui-disabled': {
+                color: 'rgba(255, 255, 255, 0.3)'
+              }
+            }}
           >
             {loading ? 'Running...' : 'Run Achilles'}
           </Button>

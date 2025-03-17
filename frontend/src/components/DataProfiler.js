@@ -110,7 +110,7 @@ function DataProfiler() {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
       <Typography variant="h4" gutterBottom component="h2">
         Data Profiler
       </Typography>
@@ -168,6 +168,13 @@ function DataProfiler() {
                 variant="contained"
                 startIcon={<SearchIcon />}
                 onClick={handleSearch}
+                sx={{ 
+                  color: '#90caf9',
+                  background: 'rgba(144, 202, 249, 0.15)',
+                  '&:hover': {
+                    background: 'rgba(144, 202, 249, 0.25)',
+                  }
+                }}
               >
                 Search
               </Button>
@@ -176,6 +183,14 @@ function DataProfiler() {
                 variant="outlined"
                 startIcon={<DownloadIcon />}
                 onClick={handleExport}
+                sx={{ 
+                  color: '#90caf9',
+                  borderColor: 'rgba(144, 202, 249, 0.5)',
+                  '&:hover': {
+                    borderColor: '#90caf9',
+                    background: 'rgba(144, 202, 249, 0.08)',
+                  }
+                }}
               >
                 Export
               </Button>
@@ -245,7 +260,16 @@ function DataProfiler() {
               placeholder="SELECT * FROM omop.person LIMIT 10;"
               sx={{ mb: 2 }}
             />
-            <Button variant="contained" color="primary">
+            <Button 
+              variant="contained" 
+              sx={{ 
+                color: '#90caf9',
+                background: 'rgba(144, 202, 249, 0.15)',
+                '&:hover': {
+                  background: 'rgba(144, 202, 249, 0.25)',
+                }
+              }}
+            >
               Run Query
             </Button>
           </Paper>

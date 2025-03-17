@@ -80,6 +80,7 @@ const theme = createTheme({
           background: 'rgba(30, 30, 40, 0.75)',
           boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
           borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+          borderRadius: 0, // Remove rounded corners from header
         },
       },
     },
@@ -91,6 +92,7 @@ const theme = createTheme({
           background: 'rgba(30, 30, 40, 0.75)',
           boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
           borderRight: '1px solid rgba(255, 255, 255, 0.05)',
+          borderRadius: 0, // Remove rounded corners from drawer
         },
       },
     },
@@ -147,16 +149,13 @@ const theme = createTheme({
 });
 
 function App() {
-  // Sidebar is now permanently open
-  const open = true;
-
   return (
     <ThemeProvider theme={theme}>
       <Router>
         <Box sx={{ display: 'flex' }}>
           <CssBaseline />
-          <Header open={open} />
-          <Sidebar open={open} />
+          <Header />
+          <Sidebar />
           <Box
             component="main"
             sx={{
@@ -164,8 +163,9 @@ function App() {
               flexGrow: 1,
               height: '100vh',
               overflow: 'auto',
-              pt: 8, // Add padding to account for the app bar
+              pt: 10, // Increased padding to account for the app bar
               px: 3,
+              ml: { xs: 0, sm: '20px' }, // Reduced margin to decrease space after sidebar
             }}
             className="main-content"
           >

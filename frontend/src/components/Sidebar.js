@@ -11,29 +11,30 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 import { 
-  ChevronLeftIcon, 
-  DashboardIcon, 
   GearIcon, 
   DesktopIcon, 
   TableIcon, 
-  BarChartIcon,
-  RocketIcon,
-  PersonIcon
+  RocketIcon
 } from '@radix-ui/react-icons';
 
 const drawerWidth = 240;
 
 const Drawer = styled(MuiDrawer)(({ theme }) => ({
+  width: drawerWidth,
+  flexShrink: 0,
   '& .MuiDrawer-paper': {
-    position: 'relative',
+    position: 'fixed',
     whiteSpace: 'nowrap',
     width: drawerWidth,
+    height: '100%',
     boxSizing: 'border-box',
+    paddingTop: '64px', // Account for header height
     backdropFilter: 'blur(10px)',
     WebkitBackdropFilter: 'blur(10px)',
     background: 'rgba(30, 30, 40, 0.75)',
     boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
     borderRight: '1px solid rgba(255, 255, 255, 0.05)',
+    borderRadius: 0, // Remove rounded corners from sidebar
   },
 }));
 
@@ -62,7 +63,7 @@ const GlassNavItem = styled(ListItemButton)(({ theme, $active }) => ({
   },
 }));
 
-function Sidebar({ open }) {
+function Sidebar() {
   const location = useLocation();
   
   const isActive = (path) => {
@@ -71,24 +72,6 @@ function Sidebar({ open }) {
 
   return (
     <Drawer variant="permanent" className="glass">
-      <Toolbar
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          px: [1],
-        }}
-      >
-        <Typography 
-          variant="subtitle1" 
-          sx={{ 
-            fontWeight: 600,
-            color: '#90caf9'
-          }}
-        >
-          Navigation
-        </Typography>
-      </Toolbar>
       <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.05)' }} />
       <List component="nav" sx={{ p: 1 }}>
         <GlassNavItem component={Link} to="/" $active={isActive('/')}>
