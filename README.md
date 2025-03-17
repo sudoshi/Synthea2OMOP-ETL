@@ -13,11 +13,13 @@ This project provides a comprehensive dashboard for monitoring the progress of t
 
 ## Architecture
 
-The project consists of three main components:
+The project consists of five main components:
 
 1. **Frontend**: A React application with Material-UI for the user interface
 2. **Backend**: An Express.js API server that interfaces with the database
 3. **Database**: A PostgreSQL database that stores the ETL data
+4. **Synthea**: A containerized version of the Synthea patient generator
+5. **Synthea API**: A Flask API for controlling the Synthea container
 
 ## Getting Started
 
@@ -40,7 +42,27 @@ The project consists of three main components:
    docker-compose up
    ```
 
-3. Access the dashboard at http://localhost:3000
+3. Access the dashboard at http://localhost:3080
+
+### Generating Synthea Data
+
+You can generate Synthea data in two ways:
+
+1. **Using the Dashboard**: Navigate to the Synthea Configuration tab in the dashboard and configure the parameters for data generation. Click the "Generate Data" button to start the process.
+
+2. **Using the Command Line**: Use the provided script to generate data and run the ETL process:
+   ```
+   ./run_synthea_and_etl.sh --population 1000 --state "Massachusetts" --city "Bedford"
+   ```
+
+   Available options:
+   - `-p, --population <number>`: Number of patients to generate (default: 1000)
+   - `-s, --seed <number>`: Random seed for reproducibility (default: 1)
+   - `-S, --state <name>`: State name (default: Massachusetts)
+   - `-c, --city <name>`: City name (default: Bedford)
+   - `-g, --gender <M|F>`: Gender filter (default: both)
+   - `-a, --age <range>`: Age range (default: all)
+   - `-m, --module <name>`: Module to run (default: all)
 
 ### Local Development
 
@@ -102,6 +124,7 @@ The project consists of three main components:
 - Configure database connections
 - Set ETL parameters
 - Manage ETL process
+- Configure Synthea data generation parameters
 
 ## License
 

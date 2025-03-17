@@ -1,6 +1,37 @@
 version: '3.8'
 
 services:
+  synthea:
+    build:
+      context: ./synthea
+      dockerfile: Dockerfile
+    volumes:
+      - synthea-output:/output
+    environment:
+      - POPULATION=1000
+      - SEED=1
+      - STATE=Massachusetts
+      - CITY=Bedford
+      - GENDER=
+      - AGE=
+      - MODULE=
+    networks:
+      - app-network
+
+  synthea-api:
+    build:
+      context: ./synthea/api
+      dockerfile: Dockerfile
+    ports:
+      - "5082:5082"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - synthea-output:/output
+    depends_on:
+      - synthea
+    networks:
+      - app-network
+
   frontend:
     build:
       context: ./frontend
@@ -134,3 +165,4 @@ volumes:
   postgres-data:
   frontend_node_modules:
   backend_node_modules:
+  synthea-output:

@@ -157,8 +157,25 @@ function SyntheaConfig() {
     });
   };
 
+  // Helper function to get progress message
+  const getProgressMessage = (progress) => {
+    if (progress < 10) {
+      return 'Initializing Synthea...';
+    } else if (progress < 30) {
+      return 'Generating patient demographics...';
+    } else if (progress < 50) {
+      return 'Generating patient medical histories...';
+    } else if (progress < 70) {
+      return 'Generating encounters and observations...';
+    } else if (progress < 90) {
+      return 'Generating claims and medications...';
+    } else {
+      return 'Finalizing data generation...';
+    }
+  };
+
   // Handle generate button click
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setGenerationStatus({
       isGenerating: true,
       progress: 0,
@@ -167,44 +184,89 @@ function SyntheaConfig() {
       completed: false
     });
     
-    // Simulate generation progress
-    const interval = setInterval(() => {
-      setGenerationStatus(prevStatus => {
-        if (prevStatus.progress >= 100) {
-          clearInterval(interval);
-          return {
-            isGenerating: false,
-            progress: 100,
-            message: 'Generation completed successfully!',
-            error: null,
-            completed: true
-          };
-        }
-        
-        const newProgress = prevStatus.progress + Math.random() * 5;
-        let message = 'Generating synthetic patients...';
-        
-        if (newProgress < 10) {
-          message = 'Initializing Synthea...';
-        } else if (newProgress < 30) {
-          message = 'Generating patient demographics...';
-        } else if (newProgress < 50) {
-          message = 'Generating patient medical histories...';
-        } else if (newProgress < 70) {
-          message = 'Generating encounters and observations...';
-        } else if (newProgress < 90) {
-          message = 'Generating claims and medications...';
-        } else {
-          message = 'Finalizing data generation...';
-        }
-        
-        return {
-          ...prevStatus,
-          progress: newProgress,
-          message
-        };
+    try {
+      // Map state codes to full names
+      const stateMap = {
+        'MA': 'Massachusetts',
+        'NY': 'New York',
+        'CA': 'California'
+      };
+      
+      // Send configuration to Synthea API
+      const response = await fetch('/api/synthea/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          population: config.population,
+          seed: config.advancedOptions.seed,
+          state: stateMap[config.state] || config.state,
+          city: config.city,
+          gender: config.genderRatio === 50 ? '' : (config.genderRatio > 50 ? 'F' : 'M'),
+          age: '', // Could be calculated from ageDistribution
+          module: config.diseases.join(',')
+        })
       });
-    }, 500);
+      
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      // Poll for status updates
+      const jobId = data.job_id;
+      const statusInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(`/api/synthea/status/${jobId}`);
+          const statusData = await statusResponse.json();
+          
+          if (statusData.status === 'completed') {
+            clearInterval(statusInterval);
+            setGenerationStatus({
+              isGenerating: false,
+              progress: 100,
+              message: 'Generation completed successfully!',
+              error: null,
+              completed: true
+            });
+          } else if (statusData.status === 'failed') {
+            clearInterval(statusInterval);
+            setGenerationStatus({
+              isGenerating: false,
+              progress: 0,
+              message: '',
+              error: statusData.error || 'Generation failed',
+              completed: false
+            });
+          } else {
+            // Calculate progress based on elapsed time (estimated)
+            const elapsed = (Date.now() / 1000) - statusData.start_time;
+            const estimatedTotal = config.population * 0.1; // Rough estimate: 0.1 seconds per patient
+            const progress = Math.min(95, (elapsed / estimatedTotal) * 100);
+            
+            setGenerationStatus({
+              isGenerating: true,
+              progress,
+              message: getProgressMessage(progress),
+              error: null,
+              completed: false
+            });
+          }
+        } catch (error) {
+          console.error('Error checking status:', error);
+        }
+      }, 2000);
+    } catch (error) {
+      setGenerationStatus({
+        isGenerating: false,
+        progress: 0,
+        message: '',
+        error: error.message,
+        completed: false
+      });
+    }
   };
 
   return (

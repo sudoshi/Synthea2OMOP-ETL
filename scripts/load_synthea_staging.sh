@@ -34,7 +34,7 @@ DB_NAME="${DB_NAME:-synthea}"
 DB_USER="${DB_USER:-postgres}"
 DB_PASSWORD="${DB_PASSWORD:-acumenus}"
 DB_SCHEMA="${POPULATION_SCHEMA:-population}"
-SYNTHEA_DATA_DIR="${SYNTHEA_DATA_DIR:-$PROJECT_ROOT/synthea_data}"
+SYNTHEA_DATA_DIR="${SYNTHEA_DATA_DIR:-/synthea-output}"
 
 # Export password for psql
 export PGPASSWORD="$DB_PASSWORD"

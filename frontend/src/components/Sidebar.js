@@ -93,10 +93,10 @@ function Sidebar({ open }) {
       <List component="nav" sx={{ p: 1 }}>
         <GlassNavItem component={Link} to="/" $active={isActive('/')}>
           <ListItemIcon>
-            <DashboardIcon width={20} height={20} />
+            <RocketIcon width={20} height={20} />
           </ListItemIcon>
           <ListItemText 
-            primary="Dashboard" 
+            primary="ETL Pipeline" 
             primaryTypographyProps={{ 
               sx: { 
                 fontWeight: isActive('/') ? 600 : 400,
@@ -133,60 +133,16 @@ function Sidebar({ open }) {
             }} 
           />
         </GlassNavItem>
-        <GlassNavItem component={Link} to="/data" $active={isActive('/data')}>
+        <GlassNavItem component={Link} to="/data-profiler" $active={isActive('/data-profiler')}>
           <ListItemIcon>
             <TableIcon width={20} height={20} />
           </ListItemIcon>
           <ListItemText 
-            primary="Data Viewer" 
+            primary="Data Profiler" 
             primaryTypographyProps={{ 
               sx: { 
-                fontWeight: isActive('/data') ? 600 : 400,
-                color: isActive('/data') ? '#90caf9' : 'inherit'
-              } 
-            }} 
-          />
-        </GlassNavItem>
-        <GlassNavItem component={Link} to="/achilles" $active={isActive('/achilles')}>
-          <ListItemIcon>
-            <BarChartIcon width={20} height={20} />
-          </ListItemIcon>
-          <ListItemText 
-            primary="Achilles" 
-            primaryTypographyProps={{ 
-              sx: { 
-                fontWeight: isActive('/achilles') ? 600 : 400,
-                color: isActive('/achilles') ? '#90caf9' : 'inherit'
-              } 
-            }} 
-          />
-        </GlassNavItem>
-        
-        <GlassNavItem component={Link} to="/etl-pipeline" $active={isActive('/etl-pipeline')}>
-          <ListItemIcon>
-            <RocketIcon width={20} height={20} />
-          </ListItemIcon>
-          <ListItemText 
-            primary="ETL Pipeline" 
-            primaryTypographyProps={{ 
-              sx: { 
-                fontWeight: isActive('/etl-pipeline') ? 600 : 400,
-                color: isActive('/etl-pipeline') ? '#90caf9' : 'inherit'
-              } 
-            }} 
-          />
-        </GlassNavItem>
-        
-        <GlassNavItem component={Link} to="/synthea-config" $active={isActive('/synthea-config')}>
-          <ListItemIcon>
-            <PersonIcon width={20} height={20} />
-          </ListItemIcon>
-          <ListItemText 
-            primary="Synthea Config" 
-            primaryTypographyProps={{ 
-              sx: { 
-                fontWeight: isActive('/synthea-config') ? 600 : 400,
-                color: isActive('/synthea-config') ? '#90caf9' : 'inherit'
+                fontWeight: isActive('/data-profiler') ? 600 : 400,
+                color: isActive('/data-profiler') ? '#90caf9' : 'inherit'
               } 
             }} 
           />

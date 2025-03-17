@@ -8,12 +8,10 @@ import Box from '@mui/material/Box';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
-import Configuration from './components/Configuration';
 import ETLMonitor from './components/ETLMonitor';
-import DataViewer from './components/DataViewer';
-import AchillesTab from './components/AchillesTab';
+import DataProfiler from './components/DataProfiler';
 import ETLPipeline from './components/ETLPipeline';
-import SyntheaConfig from './components/SyntheaConfig';
+import UnifiedConfiguration from './components/UnifiedConfiguration';
 
 // Create dark theme with glassmorphism
 const theme = createTheme({
@@ -172,13 +170,10 @@ function App() {
             className="main-content"
           >
             <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/config" element={<Configuration />} />
+              <Route path="/" element={<ETLPipeline />} />
+              <Route path="/config" element={<UnifiedConfiguration />} />
               <Route path="/monitor" element={<ETLMonitor />} />
-              <Route path="/data" element={<DataViewer />} />
-              <Route path="/achilles" element={<AchillesTab />} />
-              <Route path="/etl-pipeline" element={<ETLPipeline />} />
-              <Route path="/synthea-config" element={<SyntheaConfig />} />
+              <Route path="/data-profiler" element={<DataProfiler />} />
             </Routes>
           </Box>
         </Box>
