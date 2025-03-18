@@ -32,6 +32,7 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+*.csv
 
 # OS generated files
 .DS_Store
