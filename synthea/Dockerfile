@@ -23,6 +23,21 @@ RUN ./gradlew build
 # Create output directory
 RUN mkdir -p /synthea/output
 
+# Create a custom synthea.properties file
+RUN echo 'exporter.baseDirectory = ./output/\n\
+exporter.csv.export = true\n\
+exporter.fhir.export = false\n\
+exporter.fhir_stu3.export = false\n\
+exporter.fhir_dstu2.export = false\n\
+exporter.ccda.export = false\n\
+exporter.text.export = false\n\
+exporter.json.export = false\n\
+exporter.csv.folder_per_run = false\n\
+exporter.csv.append_mode = false\n\
+exporter.use_uuid_filenames = false\n\
+exporter.subfolders_by_id_substring = false\n\
+' > /synthea/src/main/resources/synthea.properties
+
 # Create entrypoint script
 RUN echo '#!/bin/bash\n\
 echo "Starting Synthea with parameters:"\n\
@@ -34,60 +49,42 @@ echo "Gender: $GENDER"\n\
 echo "Age: $AGE"\n\
 echo "Module: $MODULE"\n\
 \n\
-# Build command line arguments\n\
-ARGS="-p $POPULATION"\n\
+# Run Synthea directly using java command with explicit CSV export\n\
+echo "Running Synthea..."\n\
+java -jar build/libs/synthea-with-dependencies.jar \\\n\
+  -p ${POPULATION:-10} \\\n\
+  -s ${SEED:-1} \\\n\
+  --exporter.csv.export=true \\\n\
+  --exporter.fhir.export=false \\\n\
+  --exporter.fhir_stu3.export=false \\\n\
+  --exporter.fhir_dstu2.export=false \\\n\
+  --exporter.ccda.export=false \\\n\
+  --exporter.text.export=false \\\n\
+  --exporter.json.export=false \\\n\
+  ${STATE:-"Pennsylvania"} \\\n\
+  ${CITY}\n\
 \n\
-if [ ! -z "$SEED" ]; then\n\
-  ARGS="$ARGS -s $SEED"\n\
-fi\n\
+# Check if files were generated\n\
+echo "Checking for generated files..."\n\
+ls -la /synthea/output/\n\
 \n\
-if [ ! -z "$GENDER" ]; then\n\
-  ARGS="$ARGS -g $GENDER"\n\
-fi\n\
+# Copy all CSV files to shared volume\n\
+echo "Copying CSV files to shared volume..."\n\
+mkdir -p /synthea-output\n\
+find /synthea/output -name "*.csv" -exec cp {} /synthea-output/ \\;\n\
 \n\
-if [ ! -z "$AGE" ]; then\n\
-  ARGS="$ARGS -a $AGE"\n\
-fi\n\
-\n\
-if [ ! -z "$MODULE" ]; then\n\
-  ARGS="$ARGS -m $MODULE"\n\
-fi\n\
-\n\
-# Add state and city as positional arguments\n\
-if [ ! -z "$STATE" ]; then\n\
-  ARGS="$ARGS $STATE"\n\
-  \n\
-  if [ ! -z "$CITY" ]; then\n\
-    # City parameter is commented out to avoid demographics errors\n\
-    # ARGS="$ARGS \"$CITY\""\n\
-    echo "Note: City parameter '$CITY' will be ignored as Synthea may not have demographic data for it in $STATE"\n\
-  fi\n\
-fi\n\
-\n\
-# Run Synthea\n\
-echo "Running: ./run_synthea $ARGS"\n\
-./run_synthea $ARGS\n\
-\n\
-# Copy output to shared volume\n\
-echo "Copying output to shared volume..."\n\
-echo "Checking for output files..."\n\
-find /synthea -name "*.csv" | sort\n\
-\n\
-echo "Copying output to shared volume..."\n\
-mkdir -p /output\n\
-find /synthea -name "*.csv" -exec cp {} /output/ \\;\n\
+# List the copied files\n\
+echo "Files copied to /synthea-output:"\n\
+ls -la /synthea-output/\n\
 \n\
 # Create a marker file to indicate completion\n\
-touch /output/.complete\n\
+touch /synthea-output/.complete\n\
 \n\
-echo "Data generation complete. Files available in /output directory."\n\
+echo "Data generation complete. Files available in /synthea-output directory."\n\
 ' > /synthea/entrypoint.sh
 
 # Make entrypoint script executable
 RUN chmod +x /synthea/entrypoint.sh
-
-# Create volume mount point
-VOLUME ["/output"]
 
 # Set entrypoint
 ENTRYPOINT ["/synthea/entrypoint.sh"]
