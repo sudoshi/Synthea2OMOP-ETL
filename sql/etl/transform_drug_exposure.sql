@@ -35,8 +35,8 @@ SELECT
     COALESCE(cm.target_concept_id, 0) AS drug_concept_id,
     CAST(m.start_timestamp AS DATE) AS drug_exposure_start_date,
     m.start_timestamp AS drug_exposure_start_datetime,
-    CAST(m.stop_timestamp AS DATE) AS drug_exposure_end_date,
-    m.stop_timestamp AS drug_exposure_end_datetime,
+    COALESCE(CAST(m.stop_timestamp AS DATE), CAST(m.start_timestamp AS DATE)) AS drug_exposure_end_date,
+    COALESCE(m.stop_timestamp, m.start_timestamp) AS drug_exposure_end_datetime,
     NULL AS verbatim_end_date,
     32817 AS drug_type_concept_id, -- "EHR"
     NULL AS stop_reason,

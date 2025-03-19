@@ -147,9 +147,9 @@ COMMIT;
 -- Observations - Measurement (LOINC) - Process in batches
 SELECT staging.log_progress('Observations - Measurement (LOINC)', 'start');
 
--- Create a temporary table to store distinct LOINC codes for vital signs
+-- Create a table to store distinct LOINC codes for vital signs
 DROP TABLE IF EXISTS staging.temp_loinc_vital_signs;
-CREATE TEMPORARY TABLE staging.temp_loinc_vital_signs AS
+CREATE TABLE staging.temp_loinc_vital_signs AS
 SELECT DISTINCT code
 FROM population.observations_typed
 WHERE category = 'vital-signs'
@@ -227,9 +227,9 @@ SELECT staging.log_progress('Observations - Measurement (LOINC)', 'complete', (S
 -- Observations - Observation (LOINC) - Process in batches
 SELECT staging.log_progress('Observations - Observation (LOINC)', 'start');
 
--- Create a temporary table to store distinct LOINC codes for non-vital signs
+-- Create a table to store distinct LOINC codes for non-vital signs
 DROP TABLE IF EXISTS staging.temp_loinc_non_vital_signs;
-CREATE TEMPORARY TABLE staging.temp_loinc_non_vital_signs AS
+CREATE TABLE staging.temp_loinc_non_vital_signs AS
 SELECT DISTINCT code
 FROM population.observations_typed
 WHERE (category IS NULL OR category != 'vital-signs')
@@ -409,9 +409,9 @@ COMMIT;
 -- Unmapped observations - Measurement - Process in batches
 SELECT staging.log_progress('Unmapped observations - Measurement', 'start');
 
--- Create a temporary table to store distinct unmapped LOINC codes for vital signs
+-- Create a table to store distinct unmapped LOINC codes for vital signs
 DROP TABLE IF EXISTS staging.temp_unmapped_loinc_vital_signs;
-CREATE TEMPORARY TABLE staging.temp_unmapped_loinc_vital_signs AS
+CREATE TABLE staging.temp_unmapped_loinc_vital_signs AS
 SELECT DISTINCT code
 FROM population.observations_typed
 WHERE category = 'vital-signs'
@@ -484,9 +484,9 @@ SELECT staging.log_progress('Unmapped observations - Measurement', 'complete', (
 -- Unmapped observations - Observation - Process in batches
 SELECT staging.log_progress('Unmapped observations - Observation', 'start');
 
--- Create a temporary table to store distinct unmapped LOINC codes for non-vital signs
+-- Create a table to store distinct unmapped LOINC codes for non-vital signs
 DROP TABLE IF EXISTS staging.temp_unmapped_loinc_non_vital_signs;
-CREATE TEMPORARY TABLE staging.temp_unmapped_loinc_non_vital_signs AS
+CREATE TABLE staging.temp_unmapped_loinc_non_vital_signs AS
 SELECT DISTINCT code
 FROM population.observations_typed
 WHERE (category IS NULL OR category != 'vital-signs')
@@ -582,3 +582,9 @@ FROM
     staging.etl_progress
 ORDER BY 
     started_at;
+
+-- Clean up temporary tables
+DROP TABLE IF EXISTS staging.temp_loinc_vital_signs;
+DROP TABLE IF EXISTS staging.temp_loinc_non_vital_signs;
+DROP TABLE IF EXISTS staging.temp_unmapped_loinc_vital_signs;
+DROP TABLE IF EXISTS staging.temp_unmapped_loinc_non_vital_signs;

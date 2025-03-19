@@ -84,6 +84,48 @@ You can generate Synthea data in two ways:
    - `-a, --age <range>`: Age range (default: all)
    - `-m, --module <name>`: Module to run (default: all)
 
+### Running the ETL Process
+
+The ETL (Extract, Transform, Load) process converts Synthea data to the OMOP Common Data Model format. You can run the ETL process in two ways:
+
+1. **Using the Dashboard**: Navigate to the ETL Pipeline tab in the dashboard and click the "Run ETL" button.
+
+2. **Using the Command Line**: Use the provided script to run the ETL process:
+   ```
+   ./run_etl.sh
+   ```
+
+The ETL process consists of several steps:
+1. Adding missing indexes for better performance
+2. Transforming person data
+3. Adding indexes to population and staging tables
+4. Populating concept map
+5. Creating observation period data
+6. Transforming visit data
+7. Transforming condition data
+8. Transforming medication data
+9. Transforming procedure data
+10. Transforming measurement and observation data
+11. Transferring non-numeric measurements to observation
+12. Transforming death data
+13. Transforming cost data
+14. Verifying record counts
+15. Checking for unmapped source codes
+16. Verifying date ranges
+17. Verifying demographics
+18. Analyzing tables for query optimization
+
+For more detailed information about the ETL process, see the [ETL_README.md](ETL_README.md) file.
+
+#### Resetting OMOP Tables
+
+If you need to reset the OMOP tables for a fresh ETL run, use the provided script:
+```
+./reset_omop_tables.sh
+```
+
+This script will truncate all OMOP tables and reset sequences, allowing you to start the ETL process from scratch.
+
 ### Running Achilles Analysis
 
 You can run OHDSI Achilles data quality analysis in two ways:
@@ -225,6 +267,10 @@ The project includes tools for PostgreSQL database maintenance:
 ├── sql/                  # SQL scripts
 │   ├── db_maintenance/   # Database maintenance scripts
 │   ├── etl/              # ETL scripts
+│   │   ├── direct_transfer.sql      # Direct SQL approach for transferring non-numeric measurements
+│   │   ├── run_all_etl.sql          # Main ETL script
+│   │   ├── transfer_non_numeric_to_observation.sql # Original transfer script
+│   │   └── redundant/               # Redundant scripts kept for reference
 │   ├── init/             # Initialization scripts
 │   ├── omop_ddl/         # OMOP CDM DDL scripts
 │   ├── staging/          # Staging scripts
@@ -234,12 +280,20 @@ The project includes tools for PostgreSQL database maintenance:
 │   └── Dockerfile        # Dockerfile for Synthea
 ├── scripts/              # Utility scripts
 ├── utils/                # Python utilities
+├── backup/               # Backup of iteration files
+│   ├── scripts/          # Backup of Python and shell scripts
+│   └── sql/              # Backup of SQL scripts
 ├── docker-compose.yml    # Docker Compose configuration
+├── ETL_README.md         # Detailed documentation of the ETL process
+├── ETL_SUMMARY.md        # Summary of the ETL improvements
 ├── run_dashboard.sh      # Script to run all services
 ├── run_api.sh            # Script to run Python API
 ├── run_achilles.sh       # Script to run Achilles directly
 ├── run_db_maintenance.sh # Script to run database maintenance
+├── run_direct_transfer.sh # Script to run the direct transfer SQL
+├── run_etl.sh            # Script to run the ETL process
 ├── run_synthea_and_etl.sh # Script to run Synthea and ETL
+├── reset_omop_tables.sh  # Script to reset OMOP tables
 └── stop_dashboard.sh     # Script to stop all services
 ```
 
