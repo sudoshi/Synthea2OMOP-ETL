@@ -68,6 +68,8 @@ class ETLProgressTracker:
                         completed_at TIMESTAMP,
                         status VARCHAR(20) DEFAULT 'in_progress',
                         rows_processed BIGINT DEFAULT 0,
+                        total_rows BIGINT DEFAULT 0,
+                        percentage_complete NUMERIC(5,2) DEFAULT 0,
                         error_message TEXT
                     );
                     """)
@@ -85,46 +87,91 @@ class ETLProgressTracker:
                 # Combine process_name and step_name since the existing table only has step_name
                 combined_step = f"{process_name}_{step_name}"
                 
+                # Use the total_items if provided
+                total_rows = total_items if total_items is not None else 0
+                
                 cursor.execute("""
                 INSERT INTO staging.etl_progress 
-                    (step_name, status, rows_processed, error_message)
+                    (step_name, status, rows_processed, total_rows, percentage_complete, error_message)
                 VALUES 
-                    (%s, 'in_progress', 0, %s)
+                    (%s, 'in_progress', 0, %s, 0, %s)
                 ON CONFLICT (step_name) 
                 DO UPDATE SET 
                     status = 'in_progress',
                     started_at = CURRENT_TIMESTAMP,
                     completed_at = NULL,
                     rows_processed = 0,
+                    total_rows = EXCLUDED.total_rows,
+                    percentage_complete = 0,
                     error_message = EXCLUDED.error_message
-                """, (combined_step, message))
-                logger.info(f"Started ETL step: {combined_step}")
+                """, (combined_step, total_rows, message))
+                logger.info(f"Started ETL step: {combined_step} with target of {total_rows} rows")
         except Exception as e:
             logger.error(f"Failed to register step start: {e}")
     
-    def update_progress(self, process_name, step_name, processed_items, message=None):
+    def update_progress(self, process_name, step_name, processed_items, message=None, total_items=None):
         """Update the progress of an ETL step."""
         try:
             with self.conn.cursor() as cursor:
                 # Combine process_name and step_name since the existing table only has step_name
                 combined_step = f"{process_name}_{step_name}"
                 
-                # Update progress
-                cursor.execute("""
-                UPDATE staging.etl_progress 
-                SET 
-                    rows_processed = %s,
-                    error_message = COALESCE(%s, error_message)
-                WHERE 
-                    step_name = %s
-                """, (processed_items, message, combined_step))
+                # If total_items is provided, update it as well
+                if total_items is not None:
+                    # Calculate percentage
+                    percentage = round((processed_items / total_items) * 100, 2) if total_items > 0 else 0
+                    
+                    # Update progress with total and percentage
+                    cursor.execute("""
+                    UPDATE staging.etl_progress 
+                    SET 
+                        rows_processed = %s,
+                        total_rows = %s,
+                        percentage_complete = %s,
+                        error_message = COALESCE(%s, error_message)
+                    WHERE 
+                        step_name = %s
+                    """, (processed_items, total_items, percentage, message, combined_step))
+                else:
+                    # Get current total_rows
+                    cursor.execute("""
+                    SELECT total_rows FROM staging.etl_progress 
+                    WHERE step_name = %s
+                    """, (combined_step,))
+                    result = cursor.fetchone()
+                    
+                    if result and result[0] > 0:
+                        total_rows = result[0]
+                        percentage = round((processed_items / total_rows) * 100, 2) if total_rows > 0 else 0
+                    else:
+                        # If no total or total is 0, use a percentage based on processed items
+                        # This is just an estimate for display
+                        percentage = min(processed_items / 100, 99.9) if processed_items < 100 else 99.9
+                    
+                    # Update progress with calculated percentage
+                    cursor.execute("""
+                    UPDATE staging.etl_progress 
+                    SET 
+                        rows_processed = %s,
+                        percentage_complete = %s,
+                        error_message = COALESCE(%s, error_message)
+                    WHERE 
+                        step_name = %s
+                    """, (processed_items, percentage, message, combined_step))
                 
                 rows_affected = cursor.rowcount
                 if rows_affected == 0:
                     logger.error(f"Step not found: {combined_step}")
                     return
                     
-                logger.debug(f"Updated progress: {combined_step}: {processed_items} rows processed")
+                # Get the current percentage for logging
+                cursor.execute("""
+                SELECT percentage_complete FROM staging.etl_progress 
+                WHERE step_name = %s
+                """, (combined_step,))
+                current_percentage = cursor.fetchone()[0]
+                
+                logger.debug(f"Updated progress: {combined_step}: {processed_items} rows processed ({current_percentage:.2f}%)")
         except Exception as e:
             logger.error(f"Failed to update progress: {e}")
     
@@ -175,17 +222,44 @@ class ETLProgressTracker:
                     print("The ETL process has not started tracking progress yet.")
                     return
                 
-                # Query using the existing table structure
-                query = """
-                SELECT 
-                    step_name, 
-                    started_at,
-                    completed_at,
-                    status,
-                    rows_processed,
-                    error_message
-                FROM staging.etl_progress
-                """
+                # Check if the percentage_complete column exists
+                cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns
+                    WHERE table_schema = 'staging'
+                    AND table_name = 'etl_progress'
+                    AND column_name = 'percentage_complete'
+                );
+                """)
+                percentage_column_exists = cursor.fetchone()[0]
+                
+                # Query using the appropriate table structure
+                if percentage_column_exists:
+                    query = """
+                    SELECT 
+                        step_name, 
+                        started_at,
+                        completed_at,
+                        status,
+                        rows_processed,
+                        total_rows,
+                        percentage_complete,
+                        error_message
+                    FROM staging.etl_progress
+                    """
+                else:
+                    query = """
+                    SELECT 
+                        step_name, 
+                        started_at,
+                        completed_at,
+                        status,
+                        rows_processed,
+                        0 as total_rows,
+                        0 as percentage_complete,
+                        error_message
+                    FROM staging.etl_progress
+                    """
                 
                 # Filter by process name if provided by extracting from combined step name
                 if process_name:
@@ -226,7 +300,12 @@ class ETLProgressTracker:
                 print("="*80)
                 
                 for r in results:
-                    step_name, start_time, end_time, status, rows_processed, error_msg = r
+                    if len(r) == 8:  # If we're using the updated schema with percentage
+                        step_name, start_time, end_time, status, rows_processed, total_rows, percentage_complete, error_msg = r
+                    else:  # Backward compatibility
+                        step_name, start_time, end_time, status, rows_processed, error_msg = r
+                        total_rows = 0
+                        percentage_complete = 0
                     
                     # Try to extract process name and step from combined name
                     parts = step_name.split('_', 1)
@@ -252,25 +331,37 @@ class ETLProgressTracker:
                     elif status == 'failed':
                         status_str = "\033[31mFAILED\033[0m"  # Red
                     
-                    # Estimate percentage based on typical completion time
-                    # This is a rough estimate since we don't have total_items in the existing schema
-                    if status == 'completed':
-                        percentage = 100.0
-                    elif status == 'failed':
-                        percentage = rows_processed / 100  # Arbitrary estimate
-                    else:  # in_progress
-                        # Rough progress estimation based on time and rows
-                        # Assuming 60 minutes is a full processing time
-                        time_based = min((duration / 3600), 1.0) * 100
-                        row_based = min(rows_processed / 1000000, 1.0) * 100  # Assuming 1M rows is complete
-                        percentage = max(time_based, row_based)
-                        percentage = min(percentage, 99.0)  # Cap at 99% if not completed
+                    # Use stored percentage if available, otherwise estimate
+                    if percentage_complete > 0:
+                        percentage = percentage_complete
+                    else:
+                        # If we have total_rows, use that for percentage
+                        if total_rows > 0:
+                            percentage = min((rows_processed / total_rows) * 100, 99.9) if status != 'completed' else 100.0
+                        else:
+                            # Fallback to estimations
+                            if status == 'completed':
+                                percentage = 100.0
+                            elif status == 'failed':
+                                percentage = rows_processed / 100  # Arbitrary estimate
+                            else:  # in_progress
+                                # Rough progress estimation based on time and rows
+                                time_based = min((duration / 3600), 1.0) * 100  # Assuming 1 hour is complete
+                                row_based = min(rows_processed / 1000000, 1.0) * 100  # Assuming 1M rows is complete
+                                percentage = max(time_based, row_based)
+                                percentage = min(percentage, 99.0)  # Cap at 99% if not completed
                     
                     print(f"\nStep: {step_name}")
                     if process:
                         print(f"Process: {process}")
                     print(f"Status: {status_str}")
-                    print(f"Rows processed: {rows_processed:,}")
+                    
+                    # Display row counts with percentages
+                    if total_rows > 0:
+                        print(f"Progress: {rows_processed:,}/{total_rows:,} rows ({percentage:.2f}%)")
+                    else:
+                        print(f"Rows processed: {rows_processed:,} ({percentage:.2f}%)")
+                        
                     print(f"Duration: {hours:02d}:{minutes:02d}:{seconds:02d}")
                     if error_msg:
                         print(f"Message: {error_msg}")
