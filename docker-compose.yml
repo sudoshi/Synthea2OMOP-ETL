@@ -9,7 +9,7 @@ services:
     volumes:
       - ./synthea-output:/synthea-output
     environment:
-      - POPULATION=720000
+      - POPULATION=850000
       - SEED=123
       - STATE=Pennsylvania
       - CITY=

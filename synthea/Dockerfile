@@ -36,6 +36,7 @@ exporter.csv.folder_per_run = false\n\
 exporter.csv.append_mode = false\n\
 exporter.use_uuid_filenames = false\n\
 exporter.subfolders_by_id_substring = false\n\
+generate.append_numbers_to_person_names = false\n\
 ' > /synthea/src/main/resources/synthea.properties
 
 # Create entrypoint script
@@ -61,6 +62,7 @@ java -jar build/libs/synthea-with-dependencies.jar \\\n\
   --exporter.ccda.export=false \\\n\
   --exporter.text.export=false \\\n\
   --exporter.json.export=false \\\n\
+  --generate.append_numbers_to_person_names=false \\\n\
   ${STATE:-"Pennsylvania"} \\\n\
   ${CITY}\n\
 \n\
@@ -68,13 +70,17 @@ java -jar build/libs/synthea-with-dependencies.jar \\\n\
 echo "Checking for generated files..."\n\
 ls -la /synthea/output/\n\
 \n\
-# Copy all CSV files to shared volume\n\
-echo "Copying CSV files to shared volume..."\n\
+# Move all CSV files to shared volume\n\
+echo "Moving CSV files to shared volume..."\n\
 mkdir -p /synthea-output\n\
-find /synthea/output -name "*.csv" -exec cp {} /synthea-output/ \\;\n\
+find /synthea/output -name "*.csv" -exec mv {} /synthea-output/ \\;\n\
 \n\
-# List the copied files\n\
-echo "Files copied to /synthea-output:"\n\
+# Clean up the output directory\n\
+echo "Cleaning up the output directory..."\n\
+rm -rf /synthea/output/*\n\
+\n\
+# List the moved files\n\
+echo "Files moved to /synthea-output:"\n\
 ls -la /synthea-output/\n\
 \n\
 # Create a marker file to indicate completion\n\

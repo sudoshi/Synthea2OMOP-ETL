@@ -84,18 +84,54 @@ You can generate Synthea data in two ways:
    - `-a, --age <range>`: Age range (default: all)
    - `-m, --module <name>`: Module to run (default: all)
 
+### Database Initialization and Vocabulary Loading
+
+Before running the ETL process, you need to initialize the database with the OMOP CDM schema and load the vocabulary files. You can do this in several ways:
+
+1. **Using the Unified Pipeline (Recommended)**: Run the entire process (database initialization, vocabulary loading, and ETL) with a single command:
+   ```
+   ./run_unified_pipeline.sh
+   ```
+
+2. **Using the Database Initialization Script**: Initialize the database and load vocabulary separately:
+   ```
+   ./run_init_with_vocab.sh
+   ```
+
+The optimized database initialization and vocabulary loading process includes several improvements:
+
+- **Parallel Processing**: Processes vocabulary files in parallel
+- **Batch Processing**: Processes large files in batches to reduce memory usage
+- **Direct Loading**: Uses PostgreSQL's COPY command for bulk loading
+- **Special Handling**: Implements special handling for tables with long text values
+- **Dependency Checks**: Ensures that vocabulary tables exist and contain required concept IDs
+
+For more detailed information about the database initialization and vocabulary loading process, see the [VOCABULARY_LOADING_README.md](VOCABULARY_LOADING_README.md) file.
+
 ### Running the ETL Process
 
-The ETL (Extract, Transform, Load) process converts Synthea data to the OMOP Common Data Model format. You can run the ETL process in two ways:
+The ETL (Extract, Transform, Load) process converts Synthea data to the OMOP Common Data Model format. You can run the ETL process in several ways:
 
-1. **Using the Dashboard**: Navigate to the ETL Pipeline tab in the dashboard and click the "Run ETL" button.
+1. **Using the Unified Pipeline (Recommended)**: Run the entire process (database initialization, vocabulary loading, and ETL) with a single command:
+   ```
+   ./run_unified_pipeline.sh
+   ```
 
-2. **Using the Command Line**: Use the provided script to run the ETL process:
+2. **Using the Dashboard**: Navigate to the ETL Pipeline tab in the dashboard and click the "Run ETL" button.
+
+3. **Using the Standard ETL Process**: Use the provided script to run the standard ETL process:
    ```
    ./run_etl.sh
    ```
 
-The ETL process consists of several steps:
+4. **Using the Optimized ETL Process**: Use the optimized ETL process for faster performance:
+   ```
+   ./run_optimized_import.sh
+   ```
+
+#### Standard ETL Process
+
+The standard ETL process consists of several steps:
 1. Adding missing indexes for better performance
 2. Transforming person data
 3. Adding indexes to population and staging tables
@@ -115,7 +151,24 @@ The ETL process consists of several steps:
 17. Verifying demographics
 18. Analyzing tables for query optimization
 
-For more detailed information about the ETL process, see the [ETL_README.md](ETL_README.md) file.
+For more detailed information about the standard ETL process, see the [ETL_README.md](ETL_README.md) file.
+
+#### Optimized ETL Process
+
+The optimized ETL process implements several improvements:
+
+- **Direct Import Pipeline**: Eliminates intermediate staging tables
+- **Parallel Processing**: Executes independent ETL steps simultaneously
+- **SQL Optimization**: Uses bulk operations and optimized queries
+- **Combined Measurement/Observation Handling**: Directly routes data to appropriate tables
+
+Benefits of the optimized process:
+- Significantly faster processing time (up to 80% faster)
+- Reduced complexity with fewer steps
+- Better resource utilization
+- Improved reliability with comprehensive error handling
+
+For more detailed information about the optimized ETL process, see the [OPTIMIZED_ETL_README.md](OPTIMIZED_ETL_README.md) file.
 
 #### Resetting OMOP Tables
 
