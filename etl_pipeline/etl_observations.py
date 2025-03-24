@@ -306,227 +306,314 @@ def process_observations(observations_csv: str, force_reprocess: bool = False, b
     # Create persistent staging table for observations
     temp_table = "staging.observations_raw"
     conn = None
+
+    # Create etl_checkpoints table for tracking progress
     try:
-        # Get a single connection for all operations to ensure tables persist
         conn = get_connection()
-        conn.autocommit = False  # We'll manage transactions manually
-        
-        # 1) Create staging schema and table
+        conn.autocommit = True
         with conn.cursor() as cur:
-            # Create staging schema if it doesn't exist
             cur.execute("""
-            CREATE SCHEMA IF NOT EXISTS staging;
-            """)
-            
-            # Truncate destination tables if requested
-            if truncate_tables:
-                logging.info("Truncating measurement, observation, and mapping tables...")
-                cur.execute("""
-                -- Truncate destination tables
-                TRUNCATE TABLE omop.measurement CASCADE;
-                TRUNCATE TABLE omop.observation CASCADE;
-                
-                -- Create mapping tables if they don't exist
-                CREATE TABLE IF NOT EXISTS staging.measurement_map (
-                    source_measurement_id TEXT PRIMARY KEY,
-                    measurement_id BIGINT NOT NULL
-                );
-                
-                CREATE TABLE IF NOT EXISTS staging.observation_map (
-                    source_observation_id TEXT PRIMARY KEY,
-                    observation_id BIGINT NOT NULL
-                );
-                
-                -- Truncate mapping tables to ensure clean state
-                TRUNCATE TABLE staging.measurement_map CASCADE;
-                TRUNCATE TABLE staging.observation_map CASCADE;
-                """)
-                logging.info("Tables truncated and mapping tables prepared successfully")
-            
-            # Create persistent staging table
-            cur.execute(f"""
-            DROP TABLE IF EXISTS {temp_table};
-            CREATE TABLE {temp_table} (
-                id TEXT,
-                patient_id TEXT,
-                encounter_id TEXT,
-                observation_type VARCHAR(50),
-                code VARCHAR(20),
-                description TEXT,
-                value_as_string TEXT,
-                timestamp TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS staging.etl_checkpoints (
+                process_name TEXT PRIMARY KEY,
+                last_processed_id BIGINT,
+                last_offset BIGINT,
+                total_processed BIGINT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            
-            -- Create indexes for better performance
-            CREATE INDEX idx_observations_raw_patient_id ON {temp_table}(patient_id);
-            CREATE INDEX idx_observations_raw_encounter_id ON {temp_table}(encounter_id);
             """)
-            conn.commit()
-        
-        # 2) Insert rows in small batches
+    except Exception as e:
+        logging.error(f"Error creating checkpoint table: {e}")
+    finally:
+        if conn:
+            release_connection(conn)
+    
+    # Check if observations_raw table already exists with data
+    conn = get_connection()
+    table_exists = False
+    rows_loaded = 0
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f"""
+            SELECT to_regclass('staging.observations_raw') IS NOT NULL AS table_exists;
+            """)
+            table_exists = cur.fetchone()[0]
+            
+            if table_exists:
+                cur.execute(f"SELECT COUNT(*) FROM {temp_table}")
+                rows_loaded = cur.fetchone()[0]
+                logging.info(f"Found existing observations_raw table with {rows_loaded:,} rows")
+    except Exception as e:
+        logging.error(f"Error checking for observations_raw table: {e}")
+        table_exists = False
+        rows_loaded = 0
+    finally:
+        release_connection(conn)
+    
+    # Skip CSV loading if observations_raw already exists and has data
+    if table_exists and rows_loaded > 0:
+        logging.info(ColoredFormatter.info(f"✅ Using existing observations_raw table with {rows_loaded:,} rows"))
+        inserted_rows = rows_loaded
+    else:
+        # Need to create and load the table
         try:
-            with conn.cursor() as cur, open(observations_csv, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                batch = []
+            # Get a single connection for all operations to ensure tables persist
+            conn = get_connection()
+            conn.autocommit = False  # We'll manage transactions manually
+            
+            # 1) Create staging schema and table
+            with conn.cursor() as cur:
+                # Create staging schema if it doesn't exist
+                cur.execute("""
+                CREATE SCHEMA IF NOT EXISTS staging;
+                """)
                 
-                # Create progress bar
-                progress_bar = create_progress_bar(total_rows, "Loading Observations")
-                
-                for row_idx, row in enumerate(reader, start=1):
-                    # Convert row to tuple in same col order as the staging table
-                    batch.append((
-                        row.get("ID", ""),              # id
-                        row.get("PATIENT", ""),         # patient_id
-                        row.get("ENCOUNTER", ""),       # encounter_id
-                        row.get("TYPE", ""),            # observation_type
-                        row.get("CODE", ""),            # code
-                        row.get("DESCRIPTION", ""),     # description
-                        row.get("VALUE", ""),           # value_as_string
-                        row.get("DATE", "")             # timestamp
-                    ))
+                # Truncate destination tables if requested
+                if truncate_tables:
+                    logging.info("Truncating measurement, observation, and mapping tables...")
+                    cur.execute("""
+                    -- Truncate destination tables
+                    TRUNCATE TABLE omop.measurement CASCADE;
+                    TRUNCATE TABLE omop.observation CASCADE;
                     
-                    # If batch is large enough, insert
-                    if len(batch) >= BATCH_SIZE:
+                    -- Create mapping tables if they don't exist
+                    CREATE TABLE IF NOT EXISTS staging.measurement_map (
+                        source_measurement_id TEXT PRIMARY KEY,
+                        measurement_id BIGINT NOT NULL
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS staging.observation_map (
+                        source_observation_id TEXT PRIMARY KEY,
+                        observation_id BIGINT NOT NULL
+                    );
+                    
+                    -- Truncate mapping tables to ensure clean state
+                    TRUNCATE TABLE staging.measurement_map CASCADE;
+                    TRUNCATE TABLE staging.observation_map CASCADE;
+                    """)
+                    logging.info("Tables truncated and mapping tables prepared successfully")
+                
+                # Create persistent staging table
+                cur.execute(f"""
+                DROP TABLE IF EXISTS {temp_table};
+                CREATE TABLE {temp_table} (
+                    id TEXT,
+                    patient_id TEXT,
+                    encounter_id TEXT,
+                    observation_type VARCHAR(50),
+                    code VARCHAR(20),
+                    description TEXT,
+                    value_as_string TEXT,
+                    timestamp TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                -- Create indexes for better performance
+                CREATE INDEX idx_observations_raw_patient_id ON {temp_table}(patient_id);
+                CREATE INDEX idx_observations_raw_encounter_id ON {temp_table}(encounter_id);
+                """)
+                conn.commit()
+            
+            # 2) Insert rows in small batches
+            try:
+                with conn.cursor() as cur, open(observations_csv, 'r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    batch = []
+                    
+                    # Create progress bar
+                    progress_bar = create_progress_bar(total_rows, "Loading Observations")
+                    
+                    for row_idx, row in enumerate(reader, start=1):
+                        # Convert row to tuple in same col order as the staging table
+                        batch.append((
+                            row.get("ID", ""),              # id
+                            row.get("PATIENT", ""),         # patient_id
+                            row.get("ENCOUNTER", ""),       # encounter_id
+                            row.get("TYPE", ""),            # observation_type
+                            row.get("CODE", ""),            # code
+                            row.get("DESCRIPTION", ""),     # description
+                            row.get("VALUE", ""),           # value_as_string
+                            row.get("DATE", "")             # timestamp
+                        ))
+                        
+                        # If batch is large enough, insert
+                        if len(batch) >= BATCH_SIZE:
+                            _insert_observation_batch(cur, batch, temp_table)
+                            inserted_rows += len(batch)
+                            batch.clear()
+                            
+                            # Update progress bar and tracker
+                            update_progress_bar(progress_bar, BATCH_SIZE)
+                            progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
+                                                          message=f"Loaded {inserted_rows:,} of {total_rows:,} observations")
+                            
+                            # Commit after each batch to ensure data is persisted even if interrupted
+                            conn.commit()
+                    
+                    # leftover batch
+                    if batch:
                         _insert_observation_batch(cur, batch, temp_table)
                         inserted_rows += len(batch)
-                        batch.clear()
-                        
-                        # Update progress bar and tracker
-                        update_progress_bar(progress_bar, BATCH_SIZE)
+                        update_progress_bar(progress_bar, len(batch))
                         progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
                                                       message=f"Loaded {inserted_rows:,} of {total_rows:,} observations")
-                
-                # leftover batch
-                if batch:
-                    _insert_observation_batch(cur, batch, temp_table)
-                    inserted_rows += len(batch)
-                    update_progress_bar(progress_bar, len(batch))
-                    progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
-                                                  message=f"Loaded {inserted_rows:,} of {total_rows:,} observations")
-                
-                conn.commit()
-                close_progress_bar(progress_bar)
-                
+                        # Commit final batch
+                        conn.commit()
+                    close_progress_bar(progress_bar)
+                    
+            except Exception as e:
+                conn.rollback()
+                error_msg = f"Error loading observations: {e}"
+                logging.error(error_msg)
+                progress_tracker.complete_step("ETL", step_name, False, error_msg)
+                release_connection(conn)
+                return False
+            finally:
+                release_connection(conn)
+            
+            csv_load_time = time.time() - start_time
+            logging.info(f"Inserted {inserted_rows:,} rows into {temp_table} in {csv_load_time:.2f} sec.")
+        
         except Exception as e:
-            conn.rollback()
-            error_msg = f"Error loading observations: {e}"
-            logging.error(error_msg)
+            error_msg = f"Error setting up observations processing: {e}"
+            logging.error(ColoredFormatter.error(f"❌ {error_msg}"))
             progress_tracker.complete_step("ETL", step_name, False, error_msg)
-            release_connection(conn)
             return False
-        finally:
-            release_connection(conn)
-        
-        csv_load_time = time.time() - start_time
-        logging.info(f"Inserted {inserted_rows:,} rows into {temp_table} in {csv_load_time:.2f} sec.")
-        
-        # 3) Create sequences and mapping tables if they don't exist
-        execute_query("""
-        -- Create sequences for generating integer IDs
-        CREATE SEQUENCE IF NOT EXISTS staging.measurement_seq;
-        CREATE SEQUENCE IF NOT EXISTS staging.observation_seq;
-        
-        -- Create mapping tables for observation IDs
-        CREATE TABLE IF NOT EXISTS staging.measurement_map (
-            source_measurement_id TEXT PRIMARY KEY,
-            measurement_id BIGINT NOT NULL
-        );
-        
-        CREATE TABLE IF NOT EXISTS staging.observation_map (
-            source_observation_id TEXT PRIMARY KEY,
-            observation_id BIGINT NOT NULL
-        );
-        
-        -- Create indexes on the mapping tables
-        CREATE INDEX IF NOT EXISTS idx_measurement_map_source_id ON staging.measurement_map(source_measurement_id);
-        CREATE INDEX IF NOT EXISTS idx_observation_map_source_id ON staging.observation_map(source_observation_id);
-        """)
-        
-        # Debug: Print sample data to understand observation types
-        debug_conn = get_connection()
-        try:
-            with debug_conn.cursor() as cur:
-                cur.execute(f"""
-                SELECT o.code, o.timestamp, o.patient_id, o.encounter_id, o.value_as_string, '', o.observation_type
-                FROM {temp_table} o
-                LIMIT 10
-                """)
-                sample_rows = cur.fetchall()
-                
-                logging.info("Sample data from observations table:")
-                for row in sample_rows:
-                    code, timestamp, patient_id, encounter_id, value_as_string, _, observation_type = row
-                    is_numeric = observation_type == 'numeric' or (value_as_string and value_as_string.replace('.', '', 1).replace('-', '', 1).isdigit())
-                    logging.info(f"Code: {code}, Value: {value_as_string}, Type: {observation_type}, Is Numeric: {is_numeric}")
-        finally:
-            release_connection(debug_conn)
-        
-        # 4) Process measurements (quantitative observations)
-        progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
-                                      message=f"Creating measurement records")
-        
-        logging.info("Inserting into measurement table in batches...")
-        
-        # Use a single connection for all related operations
-        conn = get_connection()
-        conn.autocommit = False  # Manage transactions manually
-        try:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                SELECT COUNT(*) 
-                FROM {temp_table} o
-                WHERE o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
-                """)
-                measurement_records_to_process = cur.fetchone()[0]
-                
-            logging.info(f"Found {measurement_records_to_process:,} observations to insert into measurement table")
+
+    # 3) Create sequences and mapping tables if they don't exist
+    execute_query("""
+    -- Create sequences for generating integer IDs
+    CREATE SEQUENCE IF NOT EXISTS staging.measurement_seq;
+    CREATE SEQUENCE IF NOT EXISTS staging.observation_seq;
+    
+    -- Create mapping tables for observation IDs
+    CREATE TABLE IF NOT EXISTS staging.measurement_map (
+        source_measurement_id TEXT PRIMARY KEY,
+        measurement_id BIGINT NOT NULL
+    );
+    
+    CREATE TABLE IF NOT EXISTS staging.observation_map (
+        source_observation_id TEXT PRIMARY KEY,
+        observation_id BIGINT NOT NULL
+    );
+    
+    -- Create indexes on the mapping tables
+    CREATE INDEX IF NOT EXISTS idx_measurement_map_source_id ON staging.measurement_map(source_measurement_id);
+    CREATE INDEX IF NOT EXISTS idx_observation_map_source_id ON staging.observation_map(source_observation_id);
+    """)
+    
+    # Debug: Print sample data to understand observation types
+    debug_conn = get_connection()
+    try:
+        with debug_conn.cursor() as cur:
+            cur.execute(f"""
+            SELECT o.code, o.timestamp, o.patient_id, o.encounter_id, o.value_as_string, '', o.observation_type
+            FROM {temp_table} o
+            LIMIT 10
+            """)
+            sample_rows = cur.fetchall()
             
-            # Check if we already have these measurements in the database
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                SELECT COUNT(*) 
-                FROM {temp_table} o
-                JOIN staging.person_map pm ON pm.source_patient_id = o.patient_id
-                LEFT JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter_id
-                WHERE (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
-                AND EXISTS (
-                    SELECT 1 
-                    FROM omop.measurement m
-                    JOIN staging.person_map pm2 ON pm2.person_id = m.person_id
-                    LEFT JOIN staging.visit_map vm2 ON vm2.visit_occurrence_id = m.visit_occurrence_id
-                    WHERE pm2.source_patient_id = o.patient_id
-                    AND (vm2.source_visit_id = o.encounter_id OR (o.encounter_id IS NULL AND m.visit_occurrence_id IS NULL))
-                    AND m.measurement_source_value = o.code
-                    AND m.measurement_date = o.timestamp::date
-                    AND m.value_source_value = o.value_as_string
-                )
-                """)
-                existing_measurements = cur.fetchone()[0]
+            logging.info("Sample data from observations table:")
+            for row in sample_rows:
+                code, timestamp, patient_id, encounter_id, value_as_string, _, observation_type = row
+                is_numeric = observation_type == 'numeric' or (value_as_string and value_as_string.replace('.', '', 1).replace('-', '', 1).isdigit())
+                logging.info(f"Code: {code}, Value: {value_as_string}, Type: {observation_type}, Is Numeric: {is_numeric}")
+    finally:
+        release_connection(debug_conn)
+    
+    # 4) Process measurements (quantitative observations) using chunked approach
+    progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
+                                  message=f"Creating measurement records")
+    
+    logging.info("Inserting into measurement table in batches...")
+    
+    # Use a single connection for all related operations
+    conn = get_connection()
+    conn.autocommit = False  # Manage transactions manually
+    
+    try:
+        # Check if we have a checkpoint for measurement processing
+        with conn.cursor() as cur:
+            cur.execute("""
+            SELECT last_processed_id, total_processed 
+            FROM staging.etl_checkpoints 
+            WHERE process_name = 'measurement_processing'
+            """)
+            result = cur.fetchone()
             
-            records_to_insert = measurement_records_to_process - existing_measurements
-            logging.info(f"Found {existing_measurements:,} measurements already in database, need to insert {records_to_insert:,}")
-            
-            if records_to_insert == 0:
-                logging.info("No new measurements to insert")
+            if result:
+                last_id, already_processed = result
+                logging.info(f"Resuming measurement processing from ID {last_id}, already processed {already_processed:,} records")
             else:
-                # Create progress bar for this operation
-                progress_bar = create_progress_bar(records_to_insert, "Inserting Measurements")
-                
-                # Process in batches
-                MEASUREMENT_BATCH_SIZE = measurement_batch_size
-                processed_records = 0
-                
-                # Use a cursor with server-side processing to avoid loading all IDs into memory
-                with conn.cursor(name='measurement_cursor') as cur:
-                    # Get all observation IDs that need to be processed
+                last_id = 0
+                already_processed = 0
+                # Initialize checkpoint
+                cur.execute("""
+                INSERT INTO staging.etl_checkpoints 
+                (process_name, last_processed_id, total_processed, last_offset)
+                VALUES ('measurement_processing', 0, 0, 0)
+                """)
+                conn.commit()
+
+        # Get count of measurements to process
+        with conn.cursor() as cur:
+            cur.execute(f"""
+            SELECT COUNT(*) 
+            FROM {temp_table} o
+            WHERE o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
+            """)
+            measurement_records_to_process = cur.fetchone()[0]
+            
+        logging.info(f"Found {measurement_records_to_process:,} observations to insert into measurement table")
+        
+        # Check if we already have these measurements in the database
+        with conn.cursor() as cur:
+            cur.execute(f"""
+            SELECT COUNT(*) 
+            FROM {temp_table} o
+            JOIN staging.person_map pm ON pm.source_patient_id = o.patient_id
+            LEFT JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter_id
+            WHERE (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
+            AND EXISTS (
+                SELECT 1 
+                FROM omop.measurement m
+                JOIN staging.person_map pm2 ON pm2.person_id = m.person_id
+                LEFT JOIN staging.visit_map vm2 ON vm2.visit_occurrence_id = m.visit_occurrence_id
+                WHERE pm2.source_patient_id = o.patient_id
+                AND (vm2.source_visit_id = o.encounter_id OR (o.encounter_id IS NULL AND m.visit_occurrence_id IS NULL))
+                AND m.measurement_source_value = o.code
+                AND m.measurement_date = o.timestamp::date
+                AND m.value_source_value = o.value_as_string
+            )
+            """)
+            existing_measurements = cur.fetchone()[0]
+        
+        records_to_insert = measurement_records_to_process - existing_measurements
+        remaining_to_insert = records_to_insert - already_processed
+        logging.info(f"Found {existing_measurements:,} measurements already in database, need to insert {remaining_to_insert:,}")
+        
+        if remaining_to_insert <= 0:
+            logging.info("No new measurements to insert")
+        else:
+            # Create progress bar for this operation
+            progress_bar = create_progress_bar(remaining_to_insert, "Inserting Measurements")
+            
+            # Setup batch processing
+            chunk_size = 50000  # Adjust based on memory constraints
+            processed_this_run = 0
+            
+            # Process in chunks until completion
+            while True:
+                # Get next chunk of records based on ID
+                with conn.cursor() as cur:
                     cur.execute(f"""
-                    SELECT o.code, o.timestamp, o.patient_id, o.encounter_id, o.value_as_string, '', o.observation_type
+                    SELECT o.id, o.code, o.timestamp, o.patient_id, o.encounter_id, o.value_as_string, '', o.observation_type
                     FROM {temp_table} o
                     JOIN staging.person_map pm ON pm.source_patient_id = o.patient_id
                     LEFT JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter_id
                     WHERE (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
+                    AND o.id::bigint > {last_id}
                     AND NOT EXISTS (
                         SELECT 1 
                         FROM omop.measurement m
@@ -538,477 +625,47 @@ def process_observations(observations_csv: str, force_reprocess: bool = False, b
                         AND m.measurement_date = o.timestamp::date
                         AND m.value_source_value = o.value_as_string
                     )
+                    ORDER BY o.id
+                    LIMIT {chunk_size}
                     """)
-                    
-                    # Process in batches
-                    batch = []
-                    for row in cur:
-                        batch.append(row)
-                        
-                        # When we've collected a full batch, process it
-                        if len(batch) >= MEASUREMENT_BATCH_SIZE:
-                            # Process this batch
-                            _process_measurement_batch(conn, batch, progress_tracker, step_name, 
-                                                    progress_bar, processed_records, records_to_insert)
-                            
-                            # Update counters
-                            processed_records += len(batch)
-                            batch = []
-                            
-                            # Commit after each batch
-                            conn.commit()
-                    
-                    # Process any remaining records
-                    if batch:
-                        _process_measurement_batch(conn, batch, progress_tracker, step_name, 
-                                                progress_bar, processed_records, records_to_insert)
-                        processed_records += len(batch)
-                        conn.commit()
+                    batch = cur.fetchall()
                 
-                # Close progress bar
-                close_progress_bar(progress_bar)
-        finally:
-            release_connection(conn)
-        
-        # 5) Process observations (non-quantitative observations)
-        progress_tracker.update_progress("ETL", step_name, inserted_rows, total_items=total_rows,
-                                      message=f"Creating observation records")
-        
-        logging.info("Inserting into observation table in batches...")
-        
-        # Use a single connection for all related operations
-        conn = get_connection()
-        conn.autocommit = False  # Manage transactions manually
-        try:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                SELECT COUNT(*) 
-                FROM {temp_table} o
-                WHERE NOT (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
-                """)
-                observation_records_to_process = cur.fetchone()[0]
+                # Exit loop if no more records to process
+                if not batch:
+                    break
                 
-            logging.info(f"Found {observation_records_to_process:,} observations to insert into observation table")
+                # Process this batch
+                if batch:
+                    # Track the last ID for checkpointing
+                    last_id = batch[-1][0]  # First column is the ID
+                    
+                    # Extract the data fields needed for processing
+                    process_batch = [row[1:] for row in batch]  # Skip the ID column
+                    
+                    # Process the batch
+                    _process_measurement_batch(conn, process_batch, progress_tracker, step_name, 
+                                            progress_bar, already_processed + processed_this_run, records_to_insert)
+                    
+                    # Update counters
+                    processed_this_run += len(batch)
+                    
+                    # Update checkpoint
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                        UPDATE staging.etl_checkpoints 
+                        SET last_processed_id = %s, total_processed = %s, last_updated = CURRENT_TIMESTAMP
+                        WHERE process_name = 'measurement_processing'
+                        """, (last_id, already_processed + processed_this_run))
+                    
+                    # Commit after each batch
+                    conn.commit()
+                    
+                    # Update progress bar
+                    update_progress_bar(progress_bar, len(batch))
             
-            # Check if we already have these observations in the database
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                SELECT COUNT(*) 
-                FROM {temp_table} o
-                JOIN staging.person_map pm ON pm.source_patient_id = o.patient_id
-                LEFT JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter_id
-                WHERE NOT (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
-                AND EXISTS (
-                    SELECT 1 
-                    FROM omop.observation obs
-                    JOIN staging.person_map pm2 ON pm2.person_id = obs.person_id
-                    LEFT JOIN staging.visit_map vm2 ON vm2.visit_occurrence_id = obs.visit_occurrence_id
-                    WHERE pm2.source_patient_id = o.patient_id
-                    AND (vm2.source_visit_id = o.encounter_id OR (o.encounter_id IS NULL AND obs.visit_occurrence_id IS NULL))
-                    AND obs.observation_source_value = o.code
-                    AND obs.observation_date = o.timestamp::date
-                    AND obs.value_source_value = o.value_as_string
-                )
-                """)
-                existing_observations = cur.fetchone()[0]
+            # Close progress bar
+            close_progress_bar(progress_bar)
             
-            records_to_insert = observation_records_to_process - existing_observations
-            logging.info(f"Found {existing_observations:,} observations already in database, need to insert {records_to_insert:,}")
-            
-            if records_to_insert == 0:
-                logging.info("No new observations to insert")
-            else:
-                # Create progress bar for this operation
-                progress_bar = create_progress_bar(records_to_insert, "Inserting Observations")
-                
-                # Process in batches
-                OBSERVATION_BATCH_SIZE = observation_batch_size
-                processed_records = 0
-                
-                # Use a cursor with server-side processing to avoid loading all IDs into memory
-                with conn.cursor(name='observation_cursor') as cur:
-                    # Get all observation IDs that need to be processed
-                    cur.execute(f"""
-                    SELECT o.code, o.timestamp, o.patient_id, o.encounter_id, o.value_as_string, '', o.observation_type
-                    FROM {temp_table} o
-                    JOIN staging.person_map pm ON pm.source_patient_id = o.patient_id
-                    LEFT JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter_id
-                    WHERE NOT (o.observation_type = 'numeric' OR o.value_as_string ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$')
-                    AND NOT EXISTS (
-                        SELECT 1 
-                        FROM omop.observation obs
-                        JOIN staging.person_map pm2 ON pm2.person_id = obs.person_id
-                        LEFT JOIN staging.visit_map vm2 ON vm2.visit_occurrence_id = obs.visit_occurrence_id
-                        WHERE pm2.source_patient_id = o.patient_id
-                        AND (vm2.source_visit_id = o.encounter_id OR (o.encounter_id IS NULL AND obs.visit_occurrence_id IS NULL))
-                        AND obs.observation_source_value = o.code
-                        AND obs.observation_date = o.timestamp::date
-                        AND obs.value_source_value = o.value_as_string
-                    )
-                    """)
-                    
-                    # Process in batches
-                    batch = []
-                    for row in cur:
-                        batch.append(row)
-                        
-                        # When we've collected a full batch, process it
-                        if len(batch) >= OBSERVATION_BATCH_SIZE:
-                            # Process this batch
-                            _process_observation_batch(conn, batch, progress_tracker, step_name, 
-                                                    progress_bar, processed_records, records_to_insert)
-                            
-                            # Update counters
-                            processed_records += len(batch)
-                            batch = []
-                            
-                            # Commit after each batch
-                            conn.commit()
-                    
-                    # Process any remaining records
-                    if batch:
-                        _process_observation_batch(conn, batch, progress_tracker, step_name, 
-                                                progress_bar, processed_records, records_to_insert)
-                        processed_records += len(batch)
-                        conn.commit()
-                
-                # Close progress bar
-                close_progress_bar(progress_bar)
-        finally:
-            release_connection(conn)
-        
-        # Post-count in DB - use direct connection to avoid issues with execute_query return format
-        conn = get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM omop.measurement")
-                post_count_measurement = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM omop.observation")
-                post_count_observation = cur.fetchone()[0]
-                new_measurements = post_count_measurement - pre_count_measurement
-                new_observations = post_count_observation - pre_count_observation
-        except Exception as e:
-            logging.error(f"Error getting post-counts: {e}")
-            post_count_measurement = pre_count_measurement
-            post_count_observation = pre_count_observation
-            new_measurements = 0
-            new_observations = 0
-        finally:
-            release_connection(conn)
-        
-        end_time = time.time()
-        total_time = end_time - start_time
-        
-        logging.info(ColoredFormatter.success(
-            f"✅ Successfully processed {inserted_rows:,} observations into " +
-            f"{new_measurements:,} measurements and {new_observations:,} observations " +
-            f"in {total_time:.2f} sec"
-        ))
-        
-        # Mark completion in checkpoint system
-        mark_step_completed(step_name, {
-            "csv_rows": total_rows,
-            "inserted_rows": inserted_rows,
-            "new_measurements": new_measurements,
-            "new_observations": new_observations,
-            "processing_time_sec": total_time
-        })
-        
-        # Update ETL progress tracker with completion status
-        progress_tracker.complete_step("ETL", step_name, True, 
-                                    f"Successfully processed {inserted_rows:,} observations")
-        
-        return True
-        
+            logging.info(f"Successfully processed {processed_this_run:,} measurement records in this run")
     except Exception as e:
-        error_msg = f"Error processing observations: {e}"
-        logging.error(ColoredFormatter.error(f"❌ {error_msg}"))
-        
-        # Update ETL progress tracker with error
-        progress_tracker.complete_step("ETL", step_name, False, error_msg)
-        
-        return False
-
-def _insert_observation_batch(cur, batch, table_name: str) -> None:
-    """
-    Helper to do a parameterized INSERT for a batch into the staging table.
-    This uses the standard psycopg2 executemany approach.
-    """
-    insert_sql = f"""
-    INSERT INTO {table_name} (id, patient_id, encounter_id, observation_type, code, description, 
-                            value_as_string, timestamp)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    cur.executemany(insert_sql, batch)
-
-def _process_measurement_batch(conn, batch, progress_tracker, step_name, 
-                           progress_bar, processed_records, total_records):
-    """
-    Helper method to process a batch of measurement records
-    """
-    # Convert batch to parameters for the query
-    batch_params = []
-    src_ids = []
-    for code, timestamp, patient_id, encounter_id, value_as_string, _, obs_type in batch:
-        batch_params.append((code, timestamp, patient_id, encounter_id, value_as_string, ''))
-        # Create a unique source ID for mapping
-        encounter_part = encounter_id if encounter_id else 'NULL'
-        src_ids.append(f"{patient_id}_{encounter_part}_{code}_{timestamp}_{value_as_string}")
-    
-    # Build the placeholders for the IN clause
-    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s)" for _ in range(len(batch_params))])
-    
-    with conn.cursor() as cur:
-        # First, create or update measurement mapping records for each observation
-        for src_id in src_ids:
-            cur.execute("""
-            INSERT INTO staging.measurement_map (source_measurement_id, measurement_id)
-            VALUES (%s, nextval('staging.measurement_seq'))
-            ON CONFLICT (source_measurement_id) DO NOTHING
-            """, (src_id,))
-        
-        # Then insert this batch using the mapped IDs
-        cur.execute(f"""
-        INSERT INTO omop.measurement (
-            measurement_id,
-            person_id,
-            measurement_concept_id,
-            measurement_date,
-            measurement_datetime,
-            measurement_time,
-            measurement_type_concept_id,
-            operator_concept_id,
-            value_as_number,
-            value_as_concept_id,
-            unit_concept_id,
-            range_low,
-            range_high,
-            provider_id,
-            visit_occurrence_id,
-            visit_detail_id,
-            measurement_source_value,
-            measurement_source_concept_id,
-            unit_source_value,
-            value_source_value
-        )
-        SELECT
-            mm.measurement_id,
-            pm.person_id,
-            0, -- Will be mapped in concept mapping step
-            p.date::date,
-            p.date::timestamp,
-            NULL,
-            32817, -- EHR
-            0,
-            CASE 
-                WHEN p.value ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$' THEN p.value::numeric
-                ELSE NULL
-            END,
-            0,
-            0, -- Will be mapped in concept mapping step
-            NULL,
-            NULL,
-            NULL,
-            vm.visit_occurrence_id,
-            NULL,
-            p.code,
-            0,
-            p.units,
-            p.value
-        FROM (
-            VALUES {placeholders}
-        ) AS p(code, date, patient, encounter, value, units)
-        JOIN staging.person_map pm ON pm.source_patient_id = p.patient
-        LEFT JOIN staging.visit_map vm ON vm.source_visit_id = p.encounter
-        JOIN staging.measurement_map mm ON mm.source_measurement_id = 
-            p.patient || '_' || COALESCE(p.encounter,'NULL') || '_' || p.code || '_' || p.date || '_' || p.value
-        """, sum(batch_params, ()))
-        
-        # Get number of rows inserted in this batch
-        rows_inserted = cur.rowcount
-        
-        # Commit transaction after batch to prevent log buildup
-        conn.commit()
-        
-        # Update progress
-        current_processed = processed_records + rows_inserted
-        update_progress_bar(progress_bar, rows_inserted)
-        progress_tracker.update_progress("ETL", step_name, current_processed, total_items=total_records,
-                                      message=f"Inserted {current_processed:,} of {total_records:,} measurements")
-
-def _process_observation_batch(conn, batch, progress_tracker, step_name, 
-                            progress_bar, processed_records, total_records):
-    """
-    Helper method to process a batch of observation records
-    """
-    if not batch:
-        logging.warning("Empty batch passed to _process_observation_batch")
-        return 0
-    
-    rows_inserted = 0    
-    try:
-        # Convert batch to parameters for the query
-        batch_params = []
-        src_ids = []
-        for code, timestamp, patient_id, encounter_id, value_as_string, _, obs_type in batch:
-            batch_params.append((code, timestamp, patient_id, encounter_id, value_as_string, ''))
-            # Create a unique source ID for mapping
-            encounter_part = encounter_id if encounter_id else 'NULL'
-            src_ids.append(f"{patient_id}_{encounter_part}_{code}_{timestamp}_{value_as_string}")
-        
-        # Build the placeholders for the IN clause
-        placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s)" for _ in range(len(batch_params))])
-        
-        with conn.cursor() as cur:
-            # First, create or update observation mapping records for each observation
-            for src_id in src_ids:
-                cur.execute("""
-                INSERT INTO staging.observation_map (source_observation_id, observation_id)
-                VALUES (%s, nextval('staging.observation_seq'))
-                ON CONFLICT (source_observation_id) DO NOTHING
-                """, (src_id,))
-            
-            # Then insert this batch using the mapped IDs
-            cur.execute(f"""
-            INSERT INTO omop.observation (
-                observation_id,
-                person_id,
-                observation_concept_id,
-                observation_date,
-                observation_datetime,
-                observation_type_concept_id,
-                value_as_number,
-                value_as_string,
-                value_as_concept_id,
-                qualifier_concept_id,
-                unit_concept_id,
-                provider_id,
-                visit_occurrence_id,
-                visit_detail_id,
-                observation_source_value,
-                observation_source_concept_id,
-                unit_source_value,
-                qualifier_source_value,
-                value_source_value,
-                observation_event_id,
-                obs_event_field_concept_id
-            )
-            SELECT
-                om.observation_id,
-                pm.person_id,
-                0, -- Will be mapped in concept mapping step
-                p.date::date,
-                p.date::timestamp,
-                32817, -- EHR
-                CASE 
-                    WHEN p.value ~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$' THEN p.value::numeric
-                    ELSE NULL
-                END,
-                CASE 
-                    WHEN p.value !~ '^[-]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$' THEN p.value
-                    ELSE NULL
-                END,
-                0,
-                0,
-                0, -- Will be mapped in concept mapping step
-                NULL,
-                vm.visit_occurrence_id,
-                NULL,
-                p.code,
-                0,
-                p.units,
-                NULL,
-                p.value,
-                NULL,
-                NULL
-            FROM (
-                VALUES {placeholders}
-            ) AS p(code, date, patient, encounter, value, units)
-            JOIN staging.person_map pm ON pm.source_patient_id = p.patient
-            LEFT JOIN staging.visit_map vm ON vm.source_visit_id = p.encounter
-            JOIN staging.observation_map om ON om.source_observation_id = 
-                p.patient || '_' || COALESCE(p.encounter,'NULL') || '_' || p.code || '_' || p.date || '_' || p.value
-            """, sum(batch_params, ()))
-            
-            # Get number of rows inserted in this batch
-            rows_inserted = cur.rowcount
-            
-            # Commit the transaction to prevent log buildup
-            conn.commit()
-            
-            # Update progress
-            current_processed = processed_records + rows_inserted
-            update_progress_bar(progress_bar, rows_inserted)
-            progress_tracker.update_progress("ETL", step_name, current_processed, total_items=total_records,
-                                          message=f"Inserted {current_processed:,} of {total_records:,} observations")
-    except Exception as e:
-        logging.error(f"Error processing observation batch: {e}")
-        conn.rollback()
-        rows_inserted = 0
-    
-    return rows_inserted
-
-if __name__ == "__main__":
-    # This allows the module to be run directly for testing
-    import argparse
-    import os
-    from dotenv import load_dotenv
-    
-    # Load environment variables from .env file
-    load_dotenv()
-    
-    parser = argparse.ArgumentParser(description="Process Synthea observations into OMOP CDM")
-    parser.add_argument("--observations-csv", required=True, help="Path to observations.csv file")
-    parser.add_argument("--force", action="store_true", help="Force reprocessing even if already completed")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--batch-size", type=int, default=1000, help="Batch size for CSV loading")
-    parser.add_argument("--measurement-batch-size", type=int, default=50000, 
-                        help="Batch size for measurement processing")
-    parser.add_argument("--observation-batch-size", type=int, default=50000, 
-                        help="Batch size for observation processing")
-    parser.add_argument("--truncate-tables", action="store_true", 
-                        help="Truncate measurement and observation tables before processing")
-    
-    args = parser.parse_args()
-    
-    from etl_pipeline.etl_setup import init_logging, init_db_connection_pool
-    
-    # Initialize logging
-    init_logging(debug=args.debug)
-    
-    # Initialize database connection pool
-    db_host = os.getenv('DB_HOST', 'localhost')
-    db_port = os.getenv('DB_PORT', '5432')
-    db_name = os.getenv('DB_NAME', 'ohdsi')
-    db_user = os.getenv('DB_USER', 'postgres')
-    db_password = os.getenv('DB_PASSWORD', 'acumenus')
-    
-    logging.info(f"Connecting to database {db_host}:{db_port}/{db_name} as {db_user}")
-    
-    # Create a dictionary with the database configuration
-    db_config = {
-        'host': db_host,
-        'port': db_port,
-        'database': db_name,
-        'user': db_user,
-        'password': db_password
-    }
-    
-    # Initialize the connection pool with the database configuration
-    init_db_connection_pool(**db_config)
-    
-    try:
-        success = process_observations(
-        args.observations_csv, 
-        args.force,
-        batch_size=args.batch_size,
-        measurement_batch_size=args.measurement_batch_size,
-        observation_batch_size=args.observation_batch_size,
-        truncate_tables=args.truncate_tables
-    )
-        sys.exit(0 if success else 1)
-    except Exception as e:
-        logging.error(f"Unhandled exception in observations ETL: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        sys.exit(1)
+        error_msg = f"❌
