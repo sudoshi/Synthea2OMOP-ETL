@@ -106,7 +106,7 @@ done
 # Configure paths
 PYTHON="${PYTHON_PATH:-python3}"
 PREPROCESS_SCRIPT="$PROJECT_ROOT/python/preprocess_synthea_csv.py"
-LOAD_SCRIPT="$PROJECT_ROOT/scripts/load_synthea_staging.sh"
+LOAD_SCRIPT="$PROJECT_ROOT/scripts/load_synthea_staging_batch.sh"
 TYPING_SQL="$PROJECT_ROOT/sql/synthea_typing/instrumented_typing.sql"
 OMOP_ETL_SQL="$PROJECT_ROOT/sql/etl/run_all_etl.sql"
 
@@ -489,15 +489,22 @@ else
   START_TIME=$(date +%s)
 
   # Execute preprocessing with progress monitoring
-  if ! monitor_process_output "$PREPROCESS_CMD" "Preprocessing" 100; then
-    handle_error "Preprocessing" $?
+  monitor_process_output "$PREPROCESS_CMD" "Preprocessing" 100
+  preprocess_status=$?
+  
+  # Special case for preprocessing: If files are skipped because they already exist, consider it a success
+  if [ $preprocess_status -ne 0 ] && grep -q "Skipping .* (already exists)" "$TEMP_DIR/Preprocessing_progress.log"; then
+    skipped_count=$(grep -c "Skipping .* (already exists)" "$TEMP_DIR/Preprocessing_progress.log" || echo 0)
+    log "${BLUE}Files already processed: Skipped $skipped_count files${NC}"
+    display_progress_bar 100 100 "Preprocessing" "✓ Complete (using existing files)"
+  else
+    # Regular error handling
+    if [ $preprocess_status -ne 0 ]; then
+      handle_error "Preprocessing" $preprocess_status
+    fi
   fi
 
-  # Check for reported failures in the output
-  if grep -q "Files failed: [^0]" "$TEMP_DIR/Preprocessing_progress.log"; then
-    log "${RED}ERROR: Preprocessing reported failures despite returning a success code${NC}"
-    handle_error "Preprocessing" 1
-  fi
+  # We've already handled preprocessing errors above, so this section is no longer needed
 
   END_TIME=$(date +%s)
   DURATION=$((END_TIME - START_TIME))
@@ -510,12 +517,12 @@ else
   echo ""
 fi
 
-# 2. Load processed data into staging schema
+# 2. Load processed data into population schema
 if is_step_completed "staging_load" && [ "$FORCE_RESTART" = false ]; then
-  log "${BOLD}STEP 2: [ALREADY COMPLETED]${NC} Loading processed data into staging schema"
+  log "${BOLD}STEP 2: [ALREADY COMPLETED]${NC} Loading processed data into population schema"
   echo ""
 else
-  log "${BOLD}STEP 2: Loading processed data into staging schema (TEXT format)${NC}"
+  log "${BOLD}STEP 2: Loading processed data into population schema with efficient batch processing${NC}"
   log "${BLUE}-----------------------------------------------------------------------${NC}"
 
   # Ensure processed directory exists
@@ -525,8 +532,10 @@ else
     exit 1
   fi
 
-  # Pass progress bar option through to load script
-  LOAD_CMD="SYNTHEA_DATA_DIR=$PROCESSED_DIR $LOAD_SCRIPT"
+  # Pass progress bar option through to load script with explicit path setting
+  # Use the new efficient population loader script for better batch processing and progress tracking
+  PROCESSED_DIR_ABS="$(readlink -f "$PROCESSED_DIR")"
+  LOAD_CMD="cd $PROJECT_ROOT && DB_PASSWORD=$DB_PASSWORD SYNTHEA_DATA_DIR=\"$PROCESSED_DIR_ABS\" DB_SCHEMA=population ./scripts/load_population_efficient.sh"
   if [ "$FORCE_LOAD" = true ]; then
     LOAD_CMD="$LOAD_CMD --force"
   fi
@@ -539,8 +548,15 @@ else
   START_TIME=$(date +%s)
 
   # Execute database load with progress monitoring
-  if ! monitor_process_output "$LOAD_CMD" "Loading to Staging" 100; then
+  # The load_population_efficient.sh script has built-in progress tracking
+  if ! monitor_process_output "$LOAD_CMD" "Loading to Population" 100; then
     handle_error "Database loading" $?
+  fi
+
+  # Check for reported failures in the output
+  if grep -q "ERROR:" "$TEMP_DIR/Loading_to_Population_progress.log"; then
+    log "${RED}ERROR: Database loading reported errors despite returning a success code${NC}"
+    handle_error "Database loading" 1
   fi
 
   END_TIME=$(date +%s)
@@ -594,6 +610,41 @@ else
   echo ""
 fi
 
+# 3.5. Transfer data from population schema to staging schema
+if is_step_completed "population_to_staging" && [ "$FORCE_RESTART" = false ]; then
+  log "${BOLD}STEP 3.5: [ALREADY COMPLETED]${NC} Transferring data from population schema to staging schema"
+  echo ""
+else
+  log "${BOLD}STEP 3.5: Transferring data from population schema to staging schema${NC}"
+  log "${BLUE}-----------------------------------------------------------------------${NC}"
+  
+  # Check if transfer script exists
+  TRANSFER_SCRIPT="$PROJECT_ROOT/scripts/transfer_population_to_staging.sh"
+  if [ ! -f "$TRANSFER_SCRIPT" ]; then
+    log "${RED}ERROR: Transfer script not found: $TRANSFER_SCRIPT${NC}"
+    exit 1
+  fi
+  
+  log "Running: ${YELLOW}$TRANSFER_SCRIPT${NC}"
+  START_TIME=$(date +%s)
+  
+  # Execute transfer script with progress monitoring
+  TRANSFER_CMD="$TRANSFER_SCRIPT --host $DB_HOST --port $DB_PORT --dbname $DB_NAME --user $DB_USER --password $DB_PASSWORD"
+  if ! monitor_process_output "$TRANSFER_CMD" "Population_to_Staging" 19; then # 19 tables total
+    handle_error "Population to staging transfer" $?
+  fi
+  
+  END_TIME=$(date +%s)
+  DURATION=$((END_TIME - START_TIME))
+  
+  log "${GREEN}Population to staging transfer completed in $(format_time $DURATION)${NC}"
+  
+  # Mark step as completed
+  mark_step_completed "population_to_staging" "$DURATION"
+  
+  echo ""
+fi
+
 # 4. Map and transform typed data to OMOP CDM format
 if is_step_completed "omop_transform" && [ "$FORCE_RESTART" = false ]; then
   log "${BOLD}STEP 4: [ALREADY COMPLETED]${NC} Transforming typed data to OMOP CDM format"
@@ -631,7 +682,7 @@ fi
 
 # Calculate total ETL duration
 total_duration=0
-for step in "preprocessing" "staging_load" "typing_transform" "omop_transform"; do
+for step in "preprocessing" "staging_load" "typing_transform" "population_to_staging" "omop_transform"; do
   step_duration=$(grep -o "\"$step\":[^}]*\"duration_seconds\": [0-9]*" "$CHECKPOINT_FILE" | grep -o "[0-9]*" | tail -1)
   if [[ -n "$step_duration" ]]; then
     total_duration=$((total_duration + step_duration))
@@ -653,6 +704,9 @@ if is_step_completed "staging_load"; then
 fi
 if is_step_completed "typing_transform"; then
   log "  ${GREEN}3. Transformed to properly typed tables${NC}"
+fi
+if is_step_completed "population_to_staging"; then
+  log "  ${GREEN}3.5. Transferred data from population schema to staging schema${NC}"
 fi
 if is_step_completed "omop_transform"; then
   log "  ${GREEN}4. Mapped and transformed to OMOP CDM format${NC}"

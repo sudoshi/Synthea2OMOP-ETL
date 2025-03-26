@@ -1,8 +1,5 @@
 {
-  "completed_steps": [
-    "ensure_schemas_exist",
-    "populate_lookup_tables"
-  ],
-  "last_updated": "2025-03-23T13:59:37.960217",
+  "completed_steps": ["preprocess"],
+  "last_updated": "2025-03-25T20:34:22-04:00",
   "stats": {}
 }
