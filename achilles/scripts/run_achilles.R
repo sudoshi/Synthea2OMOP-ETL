@@ -41,29 +41,8 @@ if (is.null(results_file)) {
 # Initialize progress file
 write("", file = progress_file)
 
-# Progress callback function
-progressCallback <- function(stage, progressValue, detail) {
-  progress <- list(
-    stage = stage,
-    progress = progressValue,
-    detail = detail,
-    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  )
-  
-  # Log to console
-  log_message(paste0(
-    "Stage: ", stage, 
-    ", Progress: ", round(progressValue * 100, 2), "%", 
-    ", Detail: ", detail
-  ))
-  
-  # Write to progress file
-  write(
-    toJSON(progress, auto_unbox = TRUE), 
-    file = progress_file, 
-    append = TRUE
-  )
-}
+# Simple progress tracking
+log_message("Using simplified progress tracking (no callback)")
 
 # Setup connection
 log_message("Setting up database connection")
@@ -99,8 +78,7 @@ tryCatch({
     defaultAnalysesOnly = config$defaultAnalysesOnly,
     updateGivenAnalysesOnly = config$updateGivenAnalysesOnly,
     excludeAnalysisIds = config$excludeAnalysisIds,
-    sqlDialect = config$sqlDialect,
-    progressCallback = progressCallback
+    sqlDialect = config$sqlDialect
   )
   
   # Save results summary
