@@ -1,0 +1,47 @@
+{
+  "completed_steps": [
+    "analyze_tables",
+    "validate_etl_results",
+    "ensure_schemas_exist",
+    "populate_lookup_tables"
+  ],
+  "last_updated": "2025-03-26T06:23:25.002278",
+  "stats": {
+    "validate_etl_results": {
+      "record_counts": [
+        [
+          "condition_occurrence",
+          42431581
+        ],
+        [
+          "drug_exposure",
+          0
+        ],
+        [
+          "measurement",
+          0
+        ],
+        [
+          "observation",
+          0
+        ],
+        [
+          "observation_period",
+          1005787
+        ],
+        [
+          "person",
+          1005787
+        ],
+        [
+          "procedure_occurrence",
+          195008364
+        ],
+        [
+          "visit_occurrence",
+          75691725
+        ]
+      ]
+    }
+  }
+}

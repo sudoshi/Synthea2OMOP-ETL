@@ -189,6 +189,8 @@ def parse_arguments() -> argparse.Namespace:
                         help='Reset OMOP tables before loading (truncate and remove old data)')
     parser.add_argument('--skip-concept-mapping', action='store_true',
                         help='Skip concept mapping step')
+    parser.add_argument('--direct-import-observations', action='store_true',
+                        help='Directly import observations.csv to omop.observation table without processing')
     
     return parser.parse_args()
 
@@ -1000,7 +1002,7 @@ def process_encounters(encounters_csv: str) -> bool:
             e."START"::timestamp,
             e."STOP"::date,
             e."STOP"::timestamp,
-            32817,  -- EHR
+            32817,  # EHR
             NULL,
             NULL,
             e."Id",
@@ -1416,6 +1418,491 @@ def process_procedures(procedures_csv: str) -> bool:
                 
             progress_tracker.complete_step("ETL", step_name, False, error_msg)
             
+        return False
+
+def count_csv_rows(csv_file):
+    """
+    Count the number of rows in a CSV file (excluding header row).
+    
+    Args:
+        csv_file: Path to the CSV file
+        
+    Returns:
+        int: Number of rows in the CSV file (excluding header)
+    """
+    with open(csv_file, 'r') as f:
+        # Skip header
+        next(f)
+        # Count remaining lines
+        count = sum(1 for _ in f)
+    return count
+
+
+def direct_import_observations_to_omop(observations_csv: str, batch_size: int = 50000, min_batch_size: int = 10000, max_batch_size: int = 200000) -> bool:
+    """
+    Directly import observations from CSV to OMOP observation table using batch processing.
+    This is an optimized method for handling very large observation files.
+    
+    Args:
+        observations_csv: Path to the observations CSV file
+        batch_size: Initial batch size for processing (will be adjusted adaptively)
+        min_batch_size: Minimum batch size for adaptive sizing
+        max_batch_size: Maximum batch size for adaptive sizing
+    """
+    import psutil  # For memory monitoring
+    step_name = "direct_import_observations"
+    
+    if is_step_completed(step_name):
+        print(ColoredFormatter.info("✅ Observations were previously directly imported. Skipping."))
+        return True
+    
+    if not os.path.exists(observations_csv):
+        logger.error(f"Observations file not found: {observations_csv}")
+        return False
+    
+    logger.info(f"Starting direct import of observations from {observations_csv}")
+    print(ColoredFormatter.info("\n🔍 Directly importing observations to OMOP..."))
+    
+    try:
+        # Get a dedicated connection for this entire process to ensure temp tables persist
+        conn = get_connection()
+        
+        # Performance tracking variables
+        start_time = time.time()
+        process = psutil.Process(os.getpid())
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        processing_rates = []
+        current_batch_size = batch_size
+        
+        # Get total row count for progress tracking
+        total_rows = count_csv_rows(observations_csv)
+        logger.info(f"Found {total_rows:,} observations to process")
+        
+        # Ensure staging schema exists and create etl_progress table if it doesn't exist
+        with conn.cursor() as cur:
+            # Create the staging.etl_progress table if it doesn't exist
+            cur.execute("""
+            CREATE SCHEMA IF NOT EXISTS staging;
+            
+            CREATE TABLE IF NOT EXISTS staging.etl_progress (
+                id SERIAL PRIMARY KEY,
+                process_type VARCHAR(50),
+                step_name VARCHAR(100),
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                current_progress BIGINT DEFAULT 0,
+                total_items BIGINT,
+                status VARCHAR(20) DEFAULT 'in_progress',
+                message TEXT,
+                UNIQUE(process_type, step_name)
+            );
+            
+            -- Ensure person_map and visit_map tables exist with proper constraints
+            CREATE TABLE IF NOT EXISTS staging.person_map (
+                id SERIAL PRIMARY KEY,
+                source_patient_id TEXT UNIQUE,
+                person_id INTEGER
+            );
+            
+            CREATE TABLE IF NOT EXISTS staging.visit_map (
+                id SERIAL PRIMARY KEY,
+                source_visit_id TEXT UNIQUE,
+                visit_occurrence_id INTEGER,
+                person_id INTEGER
+            );
+            """)
+            conn.commit()
+    
+        # Start tracking this step if progress tracking is enabled
+        if progress_tracker and progress_tracker_available:
+            try:
+                progress_tracker.start_step("ETL", step_name, total_items=total_rows, 
+                                         message=f"Starting direct observations import for {total_rows} records")
+            except Exception as e:
+                logger.warning(f"Failed to start progress tracking: {e}")
+        
+        # Create a temporary table for staging the observations and ensure sequences exist
+        with conn.cursor() as cur:
+            cur.execute("""
+            -- Create sequences if they don't exist
+            CREATE SEQUENCE IF NOT EXISTS staging.person_seq;
+            CREATE SEQUENCE IF NOT EXISTS staging.visit_occurrence_seq;
+            CREATE SEQUENCE IF NOT EXISTS staging.observation_seq;
+            
+            -- Create temporary table for staging
+            DROP TABLE IF EXISTS temp_direct_observations;
+            CREATE TEMPORARY TABLE temp_direct_observations (
+                id SERIAL PRIMARY KEY,
+                date TIMESTAMP,
+                patient TEXT,
+                encounter TEXT,
+                code TEXT,
+                description TEXT,
+                value TEXT,
+                units TEXT,
+                type TEXT
+            );
+            """)
+            conn.commit()
+        
+        # Initialize progress tracking variables
+        processed_rows = 0
+        rows_inserted = 0
+        last_batch_time = start_time
+        last_log_time = start_time
+        adaptive_batch_size = batch_size
+        
+        # Setup progress bar
+        if tqdm_available:
+            progress_bar = tqdm(total=total_rows, desc="Importing Observations", unit="rows")
+        else:
+            print(f"Starting import of {total_rows:,} observations...")
+        
+        # Process the CSV in batches using cursor-based pagination
+        with open(observations_csv, 'r') as f:
+            reader = csv.DictReader(f)
+            batch = []
+            
+            for row in reader:
+                batch.append((row.get('DATE', ''), 
+                             row.get('PATIENT', ''), 
+                             row.get('ENCOUNTER', ''), 
+                             row.get('CODE', ''), 
+                             row.get('DESCRIPTION', ''), 
+                             row.get('VALUE', ''), 
+                             row.get('UNITS', ''), 
+                             row.get('TYPE', '')))
+                
+                if len(batch) >= adaptive_batch_size:
+                    # Record batch start time for performance tracking
+                    batch_start_time = time.time()
+                    
+                    # Insert the batch into temp table
+                    with conn.cursor() as cur:
+                        args_str = ','.join(cur.mogrify("(%s::timestamp, %s, %s, %s, %s, %s, %s, %s)", row).decode('utf-8') for row in batch)
+                        cur.execute(f"""
+                        INSERT INTO temp_direct_observations (date, patient, encounter, code, description, value, units, type)
+                        VALUES {args_str}
+                        """)
+                    
+                    # Process the batch from temp table to OMOP
+                    with conn.cursor() as cur:
+                        try:
+                            cur.execute("""
+                            -- First, ensure person_map and visit_map have entries for our data
+                            INSERT INTO staging.person_map (source_patient_id, person_id)
+                            SELECT DISTINCT o.patient, 
+                                   COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient), 
+                                           nextval('staging.person_seq'))
+                            FROM temp_direct_observations o
+                            WHERE NOT EXISTS (SELECT 1 FROM staging.person_map pm WHERE pm.source_patient_id = o.patient)
+                            ON CONFLICT (source_patient_id) DO NOTHING;
+                            
+                            -- First get person_id for each patient
+                            WITH patient_ids AS (
+                                INSERT INTO staging.person_map (source_patient_id, person_id)
+                                SELECT DISTINCT o.patient, 
+                                       COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient), 
+                                               nextval('staging.person_seq'))
+                                FROM temp_direct_observations o
+                                WHERE NOT EXISTS (SELECT 1 FROM staging.person_map pm WHERE pm.source_patient_id = o.patient)
+                                ON CONFLICT (source_patient_id) DO NOTHING
+                                RETURNING source_patient_id, person_id
+                            )
+                            -- Then insert into visit_map with person_id
+                            INSERT INTO staging.visit_map (source_visit_id, visit_occurrence_id, person_id)
+                            SELECT DISTINCT o.encounter, 
+                                   COALESCE((SELECT visit_occurrence_id FROM staging.visit_map WHERE source_visit_id = o.encounter), 
+                                           nextval('staging.visit_occurrence_seq')),
+                                   COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient),
+                                           (SELECT person_id FROM patient_ids WHERE source_patient_id = o.patient))
+                            FROM temp_direct_observations o
+                            WHERE NOT EXISTS (SELECT 1 FROM staging.visit_map vm WHERE vm.source_visit_id = o.encounter)
+                            ON CONFLICT (source_visit_id) DO NOTHING;
+                            
+                            -- Now insert the observations
+                            INSERT INTO omop.observation (
+                                observation_id,
+                                person_id,
+                                observation_concept_id,
+                                observation_date,
+                                observation_datetime,
+                                observation_type_concept_id,
+                                value_as_number,
+                                value_as_string,
+                                value_as_concept_id,
+                                qualifier_concept_id,
+                                unit_concept_id,
+                                provider_id,
+                                visit_occurrence_id,
+                                visit_detail_id,
+                                observation_source_value,
+                                observation_source_concept_id,
+                                unit_source_value,
+                                qualifier_source_value,
+                                value_source_value
+                            )
+                            SELECT
+                                nextval('staging.observation_seq'),
+                                pm.person_id,
+                                0,
+                                o.date::date,
+                                o.date::timestamp,
+                                32817, -- EHR
+                                CASE WHEN o.value ~ '^[0-9]+(\.[0-9]+)?$' THEN o.value::numeric ELSE NULL END,
+                                o.value,
+                                0,
+                                0,
+                                0,
+                                NULL,
+                                vm.visit_occurrence_id,
+                                NULL,
+                                o.code,
+                                0,
+                                o.units,
+                                NULL,
+                                o.value
+                            FROM temp_direct_observations o
+                            JOIN staging.person_map pm ON pm.source_patient_id = o.patient
+                            JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM omop.observation obs
+                                WHERE obs.person_id = pm.person_id
+                                  AND obs.visit_occurrence_id = vm.visit_occurrence_id
+                                  AND obs.observation_source_value = o.code
+                                  AND obs.value_source_value = o.value
+                            )
+                            """)
+                            rows_inserted += cur.rowcount
+                            logger.info(f"Inserted {cur.rowcount} rows into omop.observation (total: {rows_inserted:,})")
+                        except Exception as e:
+                            logger.error(f"Error inserting into omop.observation: {e}")
+                            conn.rollback()
+                            # Continue processing despite errors
+                            continue
+                    
+                    # Commit the transaction
+                    conn.commit()
+                    
+                    # Clear the temp table for the next batch
+                    with conn.cursor() as cur:
+                        cur.execute("TRUNCATE TABLE temp_direct_observations")
+                    conn.commit()
+                    
+                    # Update progress tracking
+                    processed_rows += len(batch)
+                    if tqdm_available:
+                        progress_bar.update(len(batch))
+                    
+                    # Calculate processing rate and adjust batch size adaptively
+                    current_time = time.time()
+                    batch_time = current_time - last_batch_time
+                    rows_per_second = len(batch) / batch_time if batch_time > 0 else 0
+                    
+                    # Adjust batch size based on performance
+                    if batch_time > 10:  # If batch took too long, reduce size
+                        adaptive_batch_size = max(1000, int(adaptive_batch_size * 0.8))
+                    elif batch_time < 2 and rows_per_second > 0:  # If batch was fast, increase size
+                        adaptive_batch_size = min(500000, int(adaptive_batch_size * 1.2))
+                    
+                    # Log progress with detailed rate and memory information
+                    elapsed = current_time - start_time
+                    percent_complete = (processed_rows / total_rows) * 100 if total_rows > 0 else 0
+                    eta = ((total_rows - processed_rows) / rows_per_second) if rows_per_second > 0 else 0
+                    current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                    memory_change = current_memory - initial_memory
+                    
+                    logger.info(f"Processed {processed_rows:,}/{total_rows:,} rows ({percent_complete:.1f}%) | "
+                               f"Rate: {rows_per_second:.1f} rows/sec | Batch size: {adaptive_batch_size:,} | "
+                               f"ETA: {eta/60:.1f} minutes | Memory: {int(current_memory)} MB ({int(memory_change):+d} MB)")
+                    
+                    # Update progress and performance metrics
+                    batch_time = time.time() - batch_start_time
+                    current_rate = len(batch) / batch_time if batch_time > 0 else 0
+                    processing_rates.append(current_rate)
+                    
+                    # Calculate average rate from the last 5 batches
+                    recent_rate = sum(processing_rates[-5:]) / min(len(processing_rates), 5) if processing_rates else 0
+                    
+                    # Calculate ETA
+                    remaining_rows = total_rows - processed_rows
+                    eta_seconds = remaining_rows / recent_rate if recent_rate > 0 else 0
+                    eta_str = str(datetime.timedelta(seconds=int(eta_seconds))) if eta_seconds > 0 else "unknown"
+                    
+                    # Monitor memory usage
+                    current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                    memory_change = current_memory - initial_memory
+                    
+                    # Adaptive batch sizing
+                    if batch_time > 5 and adaptive_batch_size > min_batch_size:
+                        # If batch is taking too long, reduce size
+                        adaptive_batch_size = max(min_batch_size, int(adaptive_batch_size * 0.8))
+                        logger.info(f"Reducing batch size to {adaptive_batch_size} due to slow processing")
+                    elif batch_time < 1 and current_memory < 1024 and adaptive_batch_size < max_batch_size:
+                        # If processing is fast and memory usage is reasonable, increase batch size
+                        adaptive_batch_size = min(max_batch_size, int(adaptive_batch_size * 1.2))
+                        logger.info(f"Increasing batch size to {adaptive_batch_size} for better throughput")
+                    
+                    # Update progress tracker
+                    if progress_tracker and progress_tracker_available:
+                        try:
+                            progress_message = (f"Imported {processed_rows:,} of {total_rows:,} observations | "
+                                              f"Rate: {int(current_rate):,} rows/s | "
+                                              f"Avg Rate: {int(recent_rate):,} rows/s | "
+                                              f"ETA: {eta_str} | "
+                                              f"Memory: {int(current_memory)} MB ({int(memory_change):+d} MB)")
+                            progress_tracker.update_progress("ETL", step_name, processed_rows, total_items=total_rows,
+                                                         message=progress_message)
+                        except Exception as e:
+                            # Just log the error but continue processing
+                            logger.error(f"Failed to update progress: {e}")
+                    
+                    # Reset for next batch
+                    batch = []
+                    last_batch_time = current_time
+            
+            # Process any remaining rows
+            if batch:
+                # Insert the batch into temp table
+                with conn.cursor() as cur:
+                    args_str = ','.join(cur.mogrify("(%s::timestamp, %s, %s, %s, %s, %s, %s, %s)", row).decode('utf-8') for row in batch)
+                    cur.execute(f"""
+                    INSERT INTO temp_direct_observations (date, patient, encounter, code, description, value, units, type)
+                    VALUES {args_str}
+                    """)
+                
+                # Process the batch from temp table to OMOP
+                with conn.cursor() as cur:
+                    try:
+                        cur.execute("""
+                        -- First, ensure person_map and visit_map have entries for our data
+                        INSERT INTO staging.person_map (source_patient_id, person_id)
+                        SELECT DISTINCT o.patient, 
+                               COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient), 
+                                       nextval('staging.person_seq'))
+                        FROM temp_direct_observations o
+                        WHERE NOT EXISTS (SELECT 1 FROM staging.person_map pm WHERE pm.source_patient_id = o.patient)
+                        ON CONFLICT (source_patient_id) DO NOTHING;
+                        
+                        -- First get person_id for each patient
+                        WITH patient_ids AS (
+                            INSERT INTO staging.person_map (source_patient_id, person_id)
+                            SELECT DISTINCT o.patient, 
+                                   COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient), 
+                                           nextval('staging.person_seq'))
+                            FROM temp_direct_observations o
+                            WHERE NOT EXISTS (SELECT 1 FROM staging.person_map pm WHERE pm.source_patient_id = o.patient)
+                            ON CONFLICT (source_patient_id) DO NOTHING
+                            RETURNING source_patient_id, person_id
+                        )
+                        -- Then insert into visit_map with person_id
+                        INSERT INTO staging.visit_map (source_visit_id, visit_occurrence_id, person_id)
+                        SELECT DISTINCT o.encounter, 
+                               COALESCE((SELECT visit_occurrence_id FROM staging.visit_map WHERE source_visit_id = o.encounter), 
+                                       nextval('staging.visit_occurrence_seq')),
+                               COALESCE((SELECT person_id FROM staging.person_map WHERE source_patient_id = o.patient),
+                                       (SELECT person_id FROM patient_ids WHERE source_patient_id = o.patient))
+                        FROM temp_direct_observations o
+                        WHERE NOT EXISTS (SELECT 1 FROM staging.visit_map vm WHERE vm.source_visit_id = o.encounter)
+                        ON CONFLICT (source_visit_id) DO NOTHING;
+                        
+                        -- Now insert the observations
+                        INSERT INTO omop.observation (
+                            observation_id,
+                            person_id,
+                            observation_concept_id,
+                            observation_date,
+                            observation_datetime,
+                            observation_type_concept_id,
+                            value_as_number,
+                            value_as_string,
+                            value_as_concept_id,
+                            qualifier_concept_id,
+                            unit_concept_id,
+                            provider_id,
+                            visit_occurrence_id,
+                            visit_detail_id,
+                            observation_source_value,
+                            observation_source_concept_id,
+                            unit_source_value,
+                            qualifier_source_value,
+                            value_source_value
+                        )
+                        SELECT
+                            nextval('staging.observation_seq'),
+                            pm.person_id,
+                            0,
+                            o.date::date,
+                            o.date::timestamp,
+                            32817, -- EHR
+                            CASE WHEN o.value ~ '^[0-9]+(\.[0-9]+)?$' THEN o.value::numeric ELSE NULL END,
+                            o.value,
+                            0,
+                            0,
+                            0,
+                            NULL,
+                            vm.visit_occurrence_id,
+                            NULL,
+                            o.code,
+                            0,
+                            o.units,
+                            NULL,
+                            o.value
+                        FROM temp_direct_observations o
+                        JOIN staging.person_map pm ON pm.source_patient_id = o.patient
+                        JOIN staging.visit_map vm ON vm.source_visit_id = o.encounter
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM omop.observation obs
+                            WHERE obs.person_id = pm.person_id
+                              AND obs.visit_occurrence_id = vm.visit_occurrence_id
+                              AND obs.observation_source_value = o.code
+                              AND obs.value_source_value = o.value
+                        )
+                        """)
+                        rows_inserted += cur.rowcount
+                        logger.info(f"Inserted {cur.rowcount} rows into omop.observation (total: {rows_inserted:,})")
+                    except Exception as e:
+                        logger.error(f"Error inserting into omop.observation: {e}")
+                        conn.rollback()
+                
+                # Commit the transaction
+                conn.commit()
+                
+                # Update progress tracking
+                processed_rows += len(batch)
+                if tqdm_available:
+                    progress_bar.update(len(batch))
+        
+        if tqdm_available:
+            progress_bar.close()
+            
+        # Calculate final performance metrics
+        total_time = time.time() - start_time
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_change = final_memory - initial_memory
+        
+        # Mark step as complete
+        if progress_tracker and progress_tracker_available:
+            try:
+                progress_tracker.complete_step("ETL", step_name, 
+                                          message=f"Completed direct import of {processed_rows:,} observations")
+            except Exception as e:
+                logger.error(f"Failed to complete progress tracking: {e}")
+        
+        # Log completion with detailed performance metrics
+        logger.info(f"Completed direct import of {processed_rows:,} observations in {total_time:.1f} seconds")
+        logger.info(f"Successfully inserted {rows_inserted:,} observations into OMOP")
+        logger.info(f"Overall processing rate: {processed_rows/total_time if total_time > 0 else 0:,.1f} rows/second")
+        logger.info(f"Memory usage: {int(final_memory)} MB (change: {int(memory_change):+d} MB)")
+        
+        # Mark step as completed in the database
+        mark_step_completed(step_name)
+        
+        print(ColoredFormatter.success(f"✅ Completed direct import of {processed_rows:,} observations ({rows_inserted:,} inserted)"))
+    
+    except Exception as e:
+        logger.error(f"Error directly importing observations: {e}")
+        print(ColoredFormatter.error(f"❌ {e}"))
         return False
 
 def process_observations(observations_csv: str) -> bool:
@@ -1945,23 +2432,23 @@ def map_source_to_standard_concepts() -> bool:
         UNION ALL
         SELECT 
             'procedure_occurrence' AS table_name,
-            COUNT(*) AS total_count,
-            SUM(CASE WHEN procedure_concept_id = 0 THEN 1 ELSE 0 END) AS unmapped_count,
-            ROUND(100.0 * SUM(CASE WHEN procedure_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS unmapped_percentage
+            COUNT(*),
+            SUM(CASE WHEN procedure_concept_id = 0 THEN 1 ELSE 0 END),
+            ROUND(100.0 * SUM(CASE WHEN procedure_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2)
         FROM omop.procedure_occurrence
         UNION ALL
         SELECT 
             'measurement' AS table_name,
-            COUNT(*) AS total_count,
-            SUM(CASE WHEN measurement_concept_id = 0 THEN 1 ELSE 0 END) AS unmapped_count,
-            ROUND(100.0 * SUM(CASE WHEN measurement_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS unmapped_percentage
+            COUNT(*),
+            SUM(CASE WHEN measurement_concept_id = 0 THEN 1 ELSE 0 END),
+            ROUND(100.0 * SUM(CASE WHEN measurement_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2)
         FROM omop.measurement
         UNION ALL
         SELECT 
             'observation' AS table_name,
-            COUNT(*) AS total_count,
-            SUM(CASE WHEN observation_concept_id = 0 THEN 1 ELSE 0 END) AS unmapped_count,
-            ROUND(100.0 * SUM(CASE WHEN observation_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS unmapped_percentage
+            COUNT(*),
+            SUM(CASE WHEN observation_concept_id = 0 THEN 1 ELSE 0 END),
+            ROUND(100.0 * SUM(CASE WHEN observation_concept_id = 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2)
         FROM omop.observation
         """, fetch=True)
         
@@ -2382,12 +2869,116 @@ def validate_etl_results(args: argparse.Namespace) -> bool:
         return False
 
 # ---------------------------
+# Interactive Menu
+# ---------------------------
+
+def display_interactive_menu() -> Dict[str, bool]:
+    """
+    Display an interactive menu to allow users to select which data domains to process.
+    Returns a dictionary with the user's selections.
+    """
+    print(ColoredFormatter.highlight("\n=== Synthea to OMOP ETL Interactive Menu ==="))
+    print("Select which data domains you would like to process:")
+    
+    # Default all options to True
+    selections = {
+        "patients": True,
+        "encounters": True,
+        "conditions": True,
+        "medications": True,
+        "procedures": True,
+        "observations": True,
+        "direct_import_observations": False,  # Default to standard processing
+        "observation_periods": True,
+        "concept_mapping": True,
+        "analyze_tables": True,
+        "validate_results": True
+    }
+    
+    # Define the menu options with descriptions
+    menu_options = [
+        ("patients", "Process patients.csv to OMOP person table"),
+        ("encounters", "Process encounters.csv to OMOP visit_occurrence table"),
+        ("conditions", "Process conditions.csv to OMOP condition_occurrence table"),
+        ("medications", "Process medications.csv to OMOP drug_exposure table"),
+        ("procedures", "Process procedures.csv to OMOP procedure_occurrence table"),
+        ("observations", "Process observations.csv to OMOP measurement and observation tables"),
+        ("direct_import_observations", "Directly import observations.csv to OMOP observation table (faster for large files)"),
+        ("observation_periods", "Create observation_period records"),
+        ("concept_mapping", "Map source concepts to standard concepts"),
+        ("analyze_tables", "Run ANALYZE on tables for query optimization"),
+        ("validate_results", "Validate ETL results")
+    ]
+    
+    # Check if we're in an interactive terminal
+    if sys.stdout.isatty():
+        try:
+            # For each option, ask the user if they want to process it
+            for key, description in menu_options:
+                # Special handling for direct import observations
+                if key == "direct_import_observations" and not selections["observations"]:
+                    continue  # Skip this option if observations processing is disabled
+                
+                # For direct import, phrase the question differently
+                if key == "direct_import_observations":
+                    print(f"\n{ColoredFormatter.info('Observations Processing Method:')}")
+                    print("1. Standard processing (split into measurement and observation tables)")
+                    print("2. Direct import (faster for large files, all go to observation table)")
+                    choice = input("Select method [1/2]: ").strip()
+                    selections["direct_import_observations"] = (choice == "2")
+                    # If direct import is selected, we still need observations processing enabled
+                    if selections["direct_import_observations"]:
+                        selections["observations"] = True
+                else:
+                    default = "Y" if selections[key] else "N"
+                    choice = input(f"{description} [Y/n]: " if default == "Y" else f"{description} [y/N]: ").strip().upper()
+                    if choice == "":
+                        choice = default
+                    selections[key] = (choice == "Y")
+            
+            # If the user disabled observations, make sure direct_import_observations is also disabled
+            if not selections["observations"]:
+                selections["direct_import_observations"] = False
+                
+        except (KeyboardInterrupt, EOFError):
+            print("\nInteractive selection cancelled. Using default settings (process all domains).")
+            return {key: True for key in selections}
+    else:
+        print(ColoredFormatter.warning("Non-interactive terminal detected. Using command line arguments only."))
+    
+    # Display summary of selections
+    print(ColoredFormatter.highlight("\nYou have selected to process:"))
+    for key, description in menu_options:
+        if key == "direct_import_observations":
+            if selections[key]:
+                print(f"✅ Observations: Direct import method")
+            elif selections["observations"]:
+                print(f"✅ Observations: Standard processing method")
+        elif selections[key]:
+            print(f"✅ {description}")
+        else:
+            print(f"❌ {description}")
+    
+    # Ask for confirmation
+    if sys.stdout.isatty():
+        try:
+            confirm = input(f"\n{ColoredFormatter.info('Proceed with these selections? [Y/n]:')} ").strip().upper()
+            if confirm == "N":
+                print("Cancelled. Exiting.")
+                sys.exit(0)
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled. Exiting.")
+            sys.exit(0)
+    
+    return selections
+
+# ---------------------------
 # Main Orchestration
 # ---------------------------
 
 def main():
-    # Parse arguments
-    global args
+    """Main ETL orchestration function."""
+    # Parse command line arguments
     args = parse_arguments()
     
     # Print a welcome message with information about progress bars
@@ -2410,6 +3001,14 @@ def main():
     # Set up logging as requested
     setup_logging(args.debug)
     
+    # Display interactive menu if not in non-interactive mode
+    interactive_selections = display_interactive_menu()
+    
+    # Override command line arguments with interactive selections
+    if args.direct_import_observations:
+        # If command line flag is set, respect it unless explicitly disabled in interactive menu
+        interactive_selections["direct_import_observations"] = True
+    
     # Validate that Synthea files exist (unless forcibly ignoring)
     valid_files, file_stats = validate_synthea_files(args.synthea_dir)
     if not valid_files and not args.force:
@@ -2428,7 +3027,7 @@ def main():
     ensure_schemas_exist()
     populate_lookup_tables()
     
-    # Process each domain in sequence
+    # Process each domain in sequence based on interactive selections
     patients_csv = os.path.join(args.synthea_dir, "patients.csv")
     encounters_csv = os.path.join(args.synthea_dir, "encounters.csv")
     conditions_csv = os.path.join(args.synthea_dir, "conditions.csv")
@@ -2436,25 +3035,64 @@ def main():
     procedures_csv = os.path.join(args.synthea_dir, "procedures.csv")
     observations_csv = os.path.join(args.synthea_dir, "observations.csv")
     
-    process_patients(patients_csv)
-    process_encounters(encounters_csv)
-    process_conditions(conditions_csv)
-    process_medications(medications_csv)
-    process_procedures(procedures_csv)
-    process_observations(observations_csv)
+    if interactive_selections["patients"]:
+        process_patients(patients_csv)
+    else:
+        print(ColoredFormatter.info("Skipping patients processing as per user selection"))
     
-    # Create observation periods
-    create_observation_periods()
+    if interactive_selections["encounters"]:
+        process_encounters(encounters_csv)
+    else:
+        print(ColoredFormatter.info("Skipping encounters processing as per user selection"))
+    
+    if interactive_selections["conditions"]:
+        process_conditions(conditions_csv)
+    else:
+        print(ColoredFormatter.info("Skipping conditions processing as per user selection"))
+    
+    if interactive_selections["medications"]:
+        process_medications(medications_csv)
+    else:
+        print(ColoredFormatter.info("Skipping medications processing as per user selection"))
+    
+    if interactive_selections["procedures"]:
+        process_procedures(procedures_csv)
+    else:
+        print(ColoredFormatter.info("Skipping procedures processing as per user selection"))
+    
+    # For observations, either use direct import or standard processing based on selection
+    if interactive_selections["observations"]:
+        if interactive_selections["direct_import_observations"]:
+            logger.info("Using direct import for observations.csv to omop.observation table")
+            direct_import_observations_to_omop(observations_csv, batch_size=args.batch_size)
+        else:
+            process_observations(observations_csv)
+    else:
+        print(ColoredFormatter.info("Skipping observations processing as per user selection"))
+    
+    # Create observation periods if selected
+    if interactive_selections["observation_periods"]:
+        create_observation_periods()
+    else:
+        print(ColoredFormatter.info("Skipping observation period creation as per user selection"))
     
     # Map concepts unless user skips
-    if not args.skip_concept_mapping:
+    if interactive_selections["concept_mapping"] and not args.skip_concept_mapping:
         map_source_to_standard_concepts()
+    else:
+        print(ColoredFormatter.info("Skipping concept mapping as per user selection"))
     
-    # Analyze tables
-    analyze_tables()
+    # Analyze tables if selected
+    if interactive_selections["analyze_tables"]:
+        analyze_tables()
+    else:
+        print(ColoredFormatter.info("Skipping table analysis as per user selection"))
     
-    # Validate results
-    validate_etl_results(args)
+    # Validate results if selected
+    if interactive_selections["validate_results"]:
+        validate_etl_results(args)
+    else:
+        print(ColoredFormatter.info("Skipping ETL validation as per user selection"))
     
     print(ColoredFormatter.success("\n🎉 ETL process completed successfully!\n"))
 
